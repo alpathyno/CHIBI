@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import './style.css';
+import MenuScene from './scenes/MenuScene';
 import MainScene from './scenes/MainScene';
 
 document.fonts.load('20px "Press Start 2P"').then(() => {
@@ -18,6 +19,6 @@ document.fonts.load('20px "Press Start 2P"').then(() => {
       default: 'arcade',
       arcade: { gravity: { x: 0, y: 1300 }, debug: false },
     },
-    scene: [MainScene],
+    scene: [MenuScene, MainScene],
   });
 });

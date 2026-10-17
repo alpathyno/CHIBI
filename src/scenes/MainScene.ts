@@ -1,55 +1,42 @@
-import Phaser from 'phaser';
-
-const KUCING = {
-  key: 'kucing-lari',
-  file: 'assets/kucing-lari.png',
-  frameWidth: 80,
-  frameHeight: 64,
-  frameAwal: 0,
-  frameAkhir: 7,
-  frameLompat: 2, // frame yang dipakai saat kucing melayang (coba 0-7)
-  skala: 1.5,
-  hitbox: { lebar: 34, tinggi: 20, x: 24, y: 28 },
-};
-
-const FONT = '"Press Start 2P"';
+import Phaser from "phaser";
+import {
+  KUCING,
+  FONT,
+  bacaRekor,
+  simpanRekor,
+  buatTekstur,
+  buatAnimasi,
+  bunyi,
+  bunyiUlang,
+} from "../umum";
 
 // pengaturan kecepatan (piksel per detik)
 const KECEPATAN_AWAL = 320;
 const KECEPATAN_MAKS = 720;
 const TAMBAHAN_PER_POIN = 0.5;
-
-const KUNCI_REKOR = 'kucing-lari-rekor';
-
-function bacaRekor(): number {
-  try {
-    return Number(localStorage.getItem(KUNCI_REKOR)) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function simpanRekor(nilai: number) {
-  try {
-    localStorage.setItem(KUNCI_REKOR, String(nilai));
-  } catch {
-    // abaikan kalau penyimpanan tidak tersedia
-  }
-}
+const LOMPAT_PENUH = 550;
+const LOMPAT_POTONG = 200;
+const NILAI_IKAN = 20;
+const JENIS_RINTANGAN = [
+  { key: "kardus", lebar: 28, tinggi: 24, offX: 2, offY: 4 },
+  { key: "ember", lebar: 22, tinggi: 30, offX: 3, offY: 4 },
+  { key: "pot", lebar: 22, tinggi: 42, offX: 3, offY: 4 },
+];
 
 export default class MainScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private obstacles!: Phaser.Physics.Arcade.Group;
   private spawnTimer?: Phaser.Time.TimerEvent;
+  private timerIkan?: Phaser.Time.TimerEvent;
   private spaceKey!: Phaser.Input.Keyboard.Key;
   private upKey!: Phaser.Input.Keyboard.Key;
   private teksSkor!: Phaser.GameObjects.Text;
-  private teksRekor!: Phaser.GameObjects.Text;
   private teksSuara!: Phaser.GameObjects.Text;
   private awan!: Phaser.GameObjects.TileSprite;
   private bukitJauh!: Phaser.GameObjects.TileSprite;
   private bukitDekat!: Phaser.GameObjects.TileSprite;
   private tanah!: Phaser.GameObjects.TileSprite;
+  private ikan!: Phaser.Physics.Arcade.Group;
   private skor = 0;
   private rekor = 0;
   private kelipatanTerakhir = 0;
@@ -58,7 +45,7 @@ export default class MainScene extends Phaser.Scene {
   private bisaUlang = false;
 
   constructor() {
-    super('MainScene');
+    super("MainScene");
   }
 
   preload() {
@@ -68,97 +55,10 @@ export default class MainScene extends Phaser.Scene {
     });
   }
 
-  // membuat gambar latar lewat kode (hanya sekali)
-  private buatTekstur() {
-    if (this.textures.exists('tanah')) return;
-    const g = this.add.graphics();
-
-    // awan
-    g.fillStyle(0xffffff);
-    const awan = (x: number, y: number) => {
-      g.fillRect(x, y + 16, 80, 16);
-      g.fillRect(x + 12, y + 8, 56, 8);
-      g.fillRect(x + 28, y, 24, 8);
-    };
-    awan(40, 20);
-    awan(260, 60);
-    awan(480, 10);
-    awan(680, 50);
-    g.generateTexture('awan', 800, 120);
-    g.clear();
-
-    // bukit berundak (pixel art), tinggi dibulatkan ke kelipatan 8
-    const bukit = (x: number, lebar: number, tinggi: number, texH: number) => {
-      const langkah = 16;
-      const n = lebar / langkah;
-      for (let i = 0; i < n; i++) {
-        const h = Math.round((tinggi * Math.sin((Math.PI * (i + 0.5)) / n)) / 8) * 8;
-        g.fillRect(x + i * langkah, texH - h, langkah, h);
-      }
-    };
-
-    g.fillStyle(0x9fdcaa);
-    bukit(0, 256, 90, 140);
-    bukit(240, 304, 120, 140);
-    bukit(560, 240, 80, 140);
-    g.generateTexture('bukit-jauh', 800, 140);
-    g.clear();
-
-    g.fillStyle(0x7fd36b);
-    bukit(0, 208, 56, 90);
-    bukit(240, 192, 48, 90);
-    bukit(592, 208, 64, 90);
-    g.generateTexture('bukit-dekat', 800, 90);
-    g.clear();
-
-    // tanah: tanah cokelat, rumput di atas, bintik-bintik
-    g.fillStyle(0xb97a4b);
-    g.fillRect(0, 0, 64, 60);
-    g.fillStyle(0x6bcb4b);
-    g.fillRect(0, 0, 64, 12);
-    g.fillStyle(0x86dc66);
-    g.fillRect(10, 2, 4, 4);
-    g.fillRect(40, 4, 4, 4);
-    g.fillStyle(0x9e6539);
-    g.fillRect(8, 26, 6, 4);
-    g.fillRect(36, 38, 8, 4);
-    g.fillRect(52, 22, 4, 4);
-    g.fillRect(20, 48, 6, 4);
-    g.generateTexture('tanah', 64, 60);
-
-    g.destroy();
-  }
-
-  // suara sederhana dibuat langsung dari osilator (tanpa file audio)
-  private bunyi(
-    freqAwal: number,
-    freqAkhir: number,
-    durasi: number,
-    tipe: OscillatorType = 'square',
-    volume = 0.08
-  ) {
-    const mgr = this.sound as Phaser.Sound.WebAudioSoundManager;
-    const ctx = mgr.context;
-    if (!ctx || !mgr.masterMuteNode || ctx.state !== 'running') return;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    const t = ctx.currentTime;
-
-    osc.type = tipe;
-    osc.frequency.setValueAtTime(freqAwal, t);
-    osc.frequency.exponentialRampToValueAtTime(freqAkhir, t + durasi);
-    gain.gain.setValueAtTime(volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + durasi);
-
-    osc.connect(gain);
-    gain.connect(mgr.masterMuteNode); // lewat sini supaya tombol mute berfungsi
-    osc.start(t);
-    osc.stop(t + durasi);
-  }
-
   private perbaruiLabelSuara() {
-    this.teksSuara.setText(this.sound.mute ? 'SUARA: OFF (M)' : 'SUARA: ON (M)');
+    this.teksSuara.setText(
+      this.sound.mute ? "SUARA: OFF (M)" : "SUARA: ON (M)",
+    );
   }
 
   private ubahSuara() {
@@ -170,6 +70,7 @@ export default class MainScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const groundY = height - 60;
 
+    this.cameras.main.fadeIn(250, 43, 43, 58);
     // reset status (penting supaya main lagi mulai dari nol)
     this.selesai = false;
     this.bisaUlang = false;
@@ -179,15 +80,17 @@ export default class MainScene extends Phaser.Scene {
     this.rekor = bacaRekor();
 
     // latar berlapis: yang jauh bergerak pelan, yang dekat lebih cepat
-    this.buatTekstur();
-    this.awan = this.add.tileSprite(0, 20, width, 120, 'awan').setOrigin(0, 0);
+    buatTekstur(this);
+    this.awan = this.add.tileSprite(0, 20, width, 120, "awan").setOrigin(0, 0);
     this.bukitJauh = this.add
-      .tileSprite(0, groundY - 140, width, 140, 'bukit-jauh')
+      .tileSprite(0, groundY - 140, width, 140, "bukit-jauh")
       .setOrigin(0, 0);
     this.bukitDekat = this.add
-      .tileSprite(0, groundY - 90, width, 90, 'bukit-dekat')
+      .tileSprite(0, groundY - 90, width, 90, "bukit-dekat")
       .setOrigin(0, 0);
-    this.tanah = this.add.tileSprite(0, groundY, width, 60, 'tanah').setOrigin(0, 0);
+    this.tanah = this.add
+      .tileSprite(0, groundY, width, 60, "tanah")
+      .setOrigin(0, 0);
 
     // tanah (fisik, tidak terlihat, tidak bergerak)
     const ground = this.add.rectangle(0, groundY, width, 60).setOrigin(0, 0);
@@ -202,97 +105,179 @@ export default class MainScene extends Phaser.Scene {
     body.setSize(KUCING.hitbox.lebar, KUCING.hitbox.tinggi);
     body.setOffset(KUCING.hitbox.x, KUCING.hitbox.y);
 
-    if (!this.anims.exists('lari')) {
-      this.anims.create({
-        key: 'lari',
-        frames: this.anims.generateFrameNumbers(KUCING.key, {
-          start: KUCING.frameAwal,
-          end: KUCING.frameAkhir,
-        }),
-        frameRate: 12,
-        repeat: -1,
-      });
-    }
-    this.player.play('lari');
+    buatAnimasi(this);
+    this.player.play("lari");
 
     this.physics.add.collider(this.player, ground);
 
     // rintangan
-    this.obstacles = this.physics.add.group({ allowGravity: false, immovable: true });
-    this.physics.add.overlap(this.player, this.obstacles, () => this.gameOver());
+    this.obstacles = this.physics.add.group({
+      allowGravity: false,
+      immovable: true,
+    });
+    this.physics.add.overlap(this.player, this.obstacles, () =>
+      this.gameOver(),
+    );
+    this.ikan = this.physics.add.group({ allowGravity: false });
+    this.physics.add.overlap(this.player, this.ikan, (_kucing, ikan) =>
+      this.ambilIkan(ikan as Phaser.GameObjects.GameObject),
+    );
     this.spawnTimer = this.time.delayedCall(1200, () => this.spawnObstacle());
+    this.jadwalkanIkan();
 
     // kontrol: spasi, panah atas, atau tap/klik (kecuali saat menekan tombol suara)
-    this.spaceKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.spaceKey = this.input.keyboard!.addKey(
+      Phaser.Input.Keyboard.KeyCodes.SPACE,
+    );
     this.upKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.UP);
     this.input.on(
-      'pointerdown',
-      (_pointer: Phaser.Input.Pointer, objek: Phaser.GameObjects.GameObject[]) => {
+      "pointerdown",
+      (
+        _pointer: Phaser.Input.Pointer,
+        objek: Phaser.GameObjects.GameObject[],
+      ) => {
         if (objek.length === 0) this.aksi();
-      }
+      },
     );
-    this.input.keyboard!.on('keydown-M', () => this.ubahSuara());
+    this.input.on("pointerup", () => this.lepasLompat());
+
+    this.input.keyboard!.on("keydown-M", () => this.ubahSuara());
 
     // judul, skor, rekor, dan tombol suara
     this.add
-      .text(width / 2, 40, 'KUCING LARI', {
+      .text(width / 2, 40, "CHIBI LARI", {
         fontFamily: FONT,
-        fontSize: '20px',
-        color: '#2B2B3A',
+        fontSize: "20px",
+        color: "#2B2B3A",
       })
       .setOrigin(0.5);
 
     this.teksSkor = this.add
-      .text(width - 20, 20, 'SKOR 00000', {
+      .text(width - 20, 20, "SKOR 00000", {
         fontFamily: FONT,
-        fontSize: '14px',
-        color: '#2B2B3A',
+        fontSize: "14px",
+        color: "#2B2B3A",
       })
       .setOrigin(1, 0);
 
-    this.teksRekor = this.add
-      .text(width - 20, 44, `REKOR ${String(this.rekor).padStart(5, '0')}`, {
+    this.add
+      .text(width - 20, 44, `REKOR ${String(this.rekor).padStart(5, "0")}`, {
         fontFamily: FONT,
-        fontSize: '10px',
-        color: '#2B2B3A',
+        fontSize: "10px",
+        color: "#2B2B3A",
       })
       .setOrigin(1, 0);
 
     this.teksSuara = this.add
-      .text(20, 20, '', { fontFamily: FONT, fontSize: '10px', color: '#2B2B3A' })
+      .text(20, 20, "", {
+        fontFamily: FONT,
+        fontSize: "10px",
+        color: "#2B2B3A",
+      })
       .setInteractive({ useHandCursor: true });
-    this.teksSuara.on('pointerdown', () => this.ubahSuara());
+    this.teksSuara.on("pointerdown", () => this.ubahSuara());
     this.perbaruiLabelSuara();
   }
 
   private spawnObstacle() {
     if (this.selesai) return;
     const { width, height } = this.scale;
-    const tinggi = Phaser.Math.Between(30, 56);
+    const jenis = Phaser.Utils.Array.GetRandom(JENIS_RINTANGAN);
 
-    const rintangan = this.add
-      .rectangle(width + 40, height - 60, 28, tinggi, 0xe4572e)
-      .setOrigin(0.5, 1)
-      .setStrokeStyle(2, 0x2b2b3a);
+    const rintangan = this.obstacles.create(
+      width + 40,
+      height - 60,
+      jenis.key,
+    ) as Phaser.Physics.Arcade.Sprite;
+    rintangan.setOrigin(0.5, 1);
 
-    this.obstacles.add(rintangan); // masukkan ke grup dulu, baru atur kecepatan
-    (rintangan.body as Phaser.Physics.Arcade.Body).setVelocityX(-this.kecepatan);
+    const body = rintangan.body as Phaser.Physics.Arcade.Body;
+    body.setSize(jenis.lebar, jenis.tinggi);
+    body.setOffset(jenis.offX, jenis.offY);
+    body.setVelocityX(-this.kecepatan);
 
-    this.spawnTimer = this.time.delayedCall(Phaser.Math.Between(1100, 2000), () =>
-      this.spawnObstacle()
+    this.spawnTimer = this.time.delayedCall(
+      Phaser.Math.Between(1100, 2000),
+      () => this.spawnObstacle(),
     );
+  }
+
+  // ikan muncul sendiri, jarang: sekali tiap 7-12 detik
+  private jadwalkanIkan() {
+    this.timerIkan = this.time.delayedCall(
+      Phaser.Math.Between(7000, 12000),
+      () => {
+        if (this.selesai) return;
+        this.spawnIkan(this.scale.width + 40);
+        this.jadwalkanIkan();
+      },
+    );
+  }
+
+  // tiga ikan melayang tinggi, hanya terjangkau kalau spasi ditahan lama
+  private spawnIkan(xTengah: number) {
+    const groundY = this.scale.height - 60;
+    const tinggiDasar = Phaser.Math.Between(120, 140);
+    const lengkung = [0, 12, 0]; // tengah sedikit lebih tinggi
+    lengkung.forEach((tambah, i) => {
+      const ikan = this.ikan.create(
+        xTengah + (i - 1) * 52,
+        groundY - tinggiDasar - tambah,
+        "ikan",
+      ) as Phaser.Physics.Arcade.Sprite;
+      (ikan.body as Phaser.Physics.Arcade.Body).setSize(34, 20);
+      ikan.setVelocityX(-this.kecepatan);
+      ikan.setData("fase", i * 1.2);
+    });
+  }
+
+  // tombol dilepas saat kucing masih naik: potong lompatnya
+  private lepasLompat() {
+    if (this.selesai) return;
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    if (body.velocity.y < -LOMPAT_POTONG) body.setVelocityY(-LOMPAT_POTONG);
+  }
+
+  private ambilIkan(ikan: Phaser.GameObjects.GameObject) {
+    const s = ikan as Phaser.GameObjects.Sprite;
+    const { x, y } = s;
+    s.destroy();
+
+    this.skor += NILAI_IKAN;
+    bunyi(this, 988, 1319, 0.1, "square", 0.07);
+
+    const teks = this.add
+      .text(x, y - 10, "+50", {
+        fontFamily: FONT,
+        fontSize: "12px",
+        color: "#FFD23F",
+        stroke: "#2B2B3A",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setDepth(5);
+    this.tweens.add({
+      targets: teks,
+      y: y - 50,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => teks.destroy(),
+    });
   }
 
   // satu aksi untuk semua input: lompat saat main, mulai ulang saat game over
   private aksi() {
     if (this.selesai) {
-      if (this.bisaUlang) this.scene.restart();
+      if (this.bisaUlang) {
+        bunyiUlang(this);
+        this.scene.restart();
+      }
       return;
     }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     if (body.blocked.down || body.touching.down) {
-      body.setVelocityY(-550);
-      this.bunyi(280, 620, 0.12, 'square');
+      body.setVelocityY(-LOMPAT_PENUH);
+      bunyi(this, 280, 620, 0.12, "square");
     }
   }
 
@@ -301,10 +286,11 @@ export default class MainScene extends Phaser.Scene {
     this.selesai = true;
     this.physics.pause();
     this.spawnTimer?.remove();
+    this.timerIkan?.remove();
     this.player.anims.stop();
     this.player.setTint(0xff6b6b);
     this.cameras.main.shake(250, 0.01);
-    this.bunyi(420, 70, 0.45, 'sawtooth', 0.1);
+    bunyi(this, 420, 70, 0.45, "sawtooth", 0.1);
 
     // cek dan simpan rekor
     const skorAkhir = Math.floor(this.skor);
@@ -323,30 +309,34 @@ export default class MainScene extends Phaser.Scene {
       .setStrokeStyle(4, 0x2b2b3a)
       .setDepth(10);
     this.add
-      .text(cx, cy - 60, 'GAME OVER', { fontFamily: FONT, fontSize: '24px', color: '#2B2B3A' })
+      .text(cx, cy - 60, "GAME OVER", {
+        fontFamily: FONT,
+        fontSize: "24px",
+        color: "#2B2B3A",
+      })
       .setOrigin(0.5)
       .setDepth(11);
     this.add
       .text(cx, cy - 18, `SKOR: ${skorAkhir}`, {
         fontFamily: FONT,
-        fontSize: '14px',
-        color: '#2B2B3A',
+        fontSize: "14px",
+        color: "#2B2B3A",
       })
       .setOrigin(0.5)
       .setDepth(11);
     this.add
-      .text(cx, cy + 14, rekorBaru ? 'REKOR BARU!' : `REKOR: ${this.rekor}`, {
+      .text(cx, cy + 14, rekorBaru ? "REKOR BARU!" : `REKOR: ${this.rekor}`, {
         fontFamily: FONT,
-        fontSize: '12px',
-        color: rekorBaru ? '#E4572E' : '#2B2B3A',
+        fontSize: "12px",
+        color: rekorBaru ? "#E4572E" : "#2B2B3A",
       })
       .setOrigin(0.5)
       .setDepth(11);
     this.add
-      .text(cx, cy + 58, 'SPASI / TAP: MAIN LAGI', {
+      .text(cx, cy + 58, "SPASI / TAP: MAIN LAGI", {
         fontFamily: FONT,
-        fontSize: '10px',
-        color: '#2B2B3A',
+        fontSize: "10px",
+        color: "#2B2B3A",
       })
       .setOrigin(0.5)
       .setDepth(11);
@@ -357,7 +347,7 @@ export default class MainScene extends Phaser.Scene {
     });
   }
 
-  update(_time: number, delta: number) {
+  update(time: number, delta: number) {
     if (
       Phaser.Input.Keyboard.JustDown(this.spaceKey) ||
       Phaser.Input.Keyboard.JustDown(this.upKey)
@@ -365,28 +355,46 @@ export default class MainScene extends Phaser.Scene {
       this.aksi();
     }
 
+    if (
+      Phaser.Input.Keyboard.JustUp(this.spaceKey) ||
+      Phaser.Input.Keyboard.JustUp(this.upKey)
+    ) {
+      this.lepasLompat();
+    }
+
     if (!this.selesai) {
       // skor naik sekitar 10 poin per detik
       this.skor += delta * 0.01;
-      this.teksSkor.setText(`SKOR ${Math.floor(this.skor).toString().padStart(5, '0')}`);
+      this.teksSkor.setText(
+        `SKOR ${Math.floor(this.skor).toString().padStart(5, "0")}`,
+      );
 
       // tiap kelipatan 100: bunyi "ting" dan angka skor berdenyut
       const kelipatan = Math.floor(this.skor / 100);
       if (kelipatan > this.kelipatanTerakhir) {
         this.kelipatanTerakhir = kelipatan;
-        this.bunyi(880, 1320, 0.15, 'triangle', 0.1);
-        this.tweens.add({ targets: this.teksSkor, scale: 1.25, duration: 100, yoyo: true });
+        bunyi(this, 880, 1320, 0.15, "triangle", 0.1);
+        this.tweens.add({
+          targets: this.teksSkor,
+          scale: 1.25,
+          duration: 100,
+          yoyo: true,
+        });
       }
 
       // makin tinggi skor, makin cepat (sampai batas maksimum)
-      this.kecepatan = Math.min(KECEPATAN_AWAL + this.skor * TAMBAHAN_PER_POIN, KECEPATAN_MAKS);
+      this.kecepatan = Math.min(
+        KECEPATAN_AWAL + this.skor * TAMBAHAN_PER_POIN,
+        KECEPATAN_MAKS,
+      );
+      // lompat bisa dikontrol: tahan = tinggi, lepas cepat = pendek
       this.player.anims.timeScale = this.kecepatan / KECEPATAN_AWAL;
 
       // pose kucing: berlari di tanah, pose khusus saat melayang
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       const diTanah = body.blocked.down || body.touching.down;
       if (diTanah) {
-        if (!this.player.anims.isPlaying) this.player.play('lari');
+        if (!this.player.anims.isPlaying) this.player.play("lari");
       } else if (this.player.anims.isPlaying) {
         this.player.anims.stop();
         this.player.setFrame(KUCING.frameLompat);
@@ -395,6 +403,12 @@ export default class MainScene extends Phaser.Scene {
       // semua rintangan ikut kecepatan terbaru
       this.obstacles.getChildren().forEach((o) => {
         (o.body as Phaser.Physics.Arcade.Body).setVelocityX(-this.kecepatan);
+      });
+      // ikan ikut kecepatan dan bergoyang pelan
+      this.ikan.getChildren().forEach((o) => {
+        (o.body as Phaser.Physics.Arcade.Body).setVelocityX(-this.kecepatan);
+        (o as Phaser.GameObjects.Sprite).angle =
+          Math.sin(time / 150 + (o.getData("fase") as number)) * 8;
       });
 
       // geser latar: lapisan dekat lebih cepat dari yang jauh
@@ -406,8 +420,18 @@ export default class MainScene extends Phaser.Scene {
     }
 
     // hapus rintangan yang sudah lewat layar
-    this.obstacles.getChildren().slice().forEach((o) => {
-      if ((o as Phaser.GameObjects.Rectangle).x < -60) o.destroy();
-    });
+    this.obstacles
+      .getChildren()
+      .slice()
+      .forEach((o) => {
+        if ((o as Phaser.GameObjects.Sprite).x < -60) o.destroy();
+      });
+
+    this.ikan
+      .getChildren()
+      .slice()
+      .forEach((o) => {
+        if ((o as Phaser.GameObjects.Sprite).x < -60) o.destroy();
+      });
   }
 }

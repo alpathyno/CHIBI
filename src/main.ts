@@ -16,7 +16,7 @@ document.fonts.load('20px "Press Start 2P"').then(() => {
     },
     physics: {
       default: 'arcade',
-      arcade: { gravity: { x: 0, y: 1300 }, debug: true },
+      arcade: { gravity: { x: 0, y: 1300 }, debug: false },
     },
     scene: [MainScene],
   });

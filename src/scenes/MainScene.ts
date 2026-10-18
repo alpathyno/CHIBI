@@ -24,6 +24,22 @@ const JENIS_RINTANGAN = [
   { key: "pot", lebar: 22, tinggi: 42, offX: 3, offY: 4 },
 ];
 const PANJANG_SIKLUS = 100000; // milidetik: 100 detik untuk satu putaran penuh
+const WAKTU_BURUNG_MULAI = 15000; // ms: burung mulai muncul setelah 15 detik
+const TAMBAHAN_KECEPATAN_BURUNG = 70; // burung terbang sedikit lebih cepat dari dunia
+
+const JETPACK_DURASI = 5000; // ms
+const NILAI_IKAN_JETPACK = 10;
+
+// pola ikan di udara saat jetpack: n = jumlah ikan, tinggi(i, a) = ketinggian ikan ke-i
+const POLA_UDARA: { n: number; tinggi: (i: number, a: number) => number }[] = [
+  { n: 7, tinggi: (_i, a) => a }, // garis lurus
+  { n: 9, tinggi: (i, a) => a + Math.sin(i * 0.55) * 40 }, // gelombang
+  { n: 8, tinggi: (i, a) => a + (Math.floor(i / 2) % 2) * 60 }, // zig-zag
+  { n: 7, tinggi: (i, a) => a + i * 18 }, // tangga naik
+  { n: 7, tinggi: (i, a) => a - i * 18 }, // tangga turun
+  { n: 9, tinggi: (i, a) => a + Math.sin((i / 8) * Math.PI) * 80 }, // busur
+];
+
 const SIKLUS = [
   {
     t: 0.0,
@@ -110,6 +126,9 @@ export default class MainScene extends Phaser.Scene {
   private bintang: Phaser.GameObjects.Image[] = [];
   private matahari!: Phaser.GameObjects.Image;
   private waktuMain = 0;
+  private burung!: Phaser.Physics.Arcade.Group;
+  private timerBurung?: Phaser.Time.TimerEvent;
+  private burungAkanDatang = false;
   private bulan!: Phaser.GameObjects.Image;
   private debuLari!: Phaser.GameObjects.Particles.ParticleEmitter;
   private debuMendarat!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -119,6 +138,18 @@ export default class MainScene extends Phaser.Scene {
   private sebelumnyaDiTanah = false;
   private dijeda = false;
   private panelJeda!: Phaser.GameObjects.Container;
+  private itemJetpack!: Phaser.Physics.Arcade.Group;
+  private jetpackPakai!: Phaser.GameObjects.Image;
+  private apiJetpack!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private hudJetpack!: Phaser.GameObjects.Container;
+  private barJetpack!: Phaser.GameObjects.Rectangle;
+  private timerJetpack?: Phaser.Time.TimerEvent;
+  private timerPola?: Phaser.Time.TimerEvent;
+  private terbang = false;
+  private sisaTerbang = 0;
+  private bipTerakhir = -1;
+  private kebalSampai = 0;
+
   // dipanggil otomatis saat tab ditinggalkan atau jendela kehilangan fokus
   private jedaOtomatis = () => {
     if (!this.dijeda) this.ubahJeda();
@@ -173,6 +204,11 @@ export default class MainScene extends Phaser.Scene {
     this.semuaPartikel.forEach((e) => e.setActive(!this.dijeda));
 
     this.musik.jeda(this.dijeda);
+    this.burung.getChildren().forEach((b) => {
+      const a = (b as Phaser.GameObjects.Sprite).anims;
+      if (this.dijeda) a.pause();
+      else a.resume();
+    });
     this.panelJeda.setVisible(this.dijeda);
     bunyi(
       this,
@@ -261,7 +297,12 @@ export default class MainScene extends Phaser.Scene {
     this.selesai = false;
     this.bisaUlang = false;
     this.skor = 0;
+    this.burungAkanDatang = false;
     this.waktuMain = 0;
+    this.terbang = false;
+    this.sisaTerbang = 0;
+    this.bipTerakhir = -1;
+    this.kebalSampai = 0;
     this.sebelumnyaDiTanah = false;
     this.kelipatanTerakhir = 0;
     this.kecepatan = KECEPATAN_AWAL;
@@ -382,8 +423,32 @@ export default class MainScene extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.ikan, (_kucing, ikan) =>
       this.ambilIkan(ikan as Phaser.GameObjects.GameObject),
     );
+    this.burung = this.physics.add.group({
+      allowGravity: false,
+      immovable: true,
+    });
+    this.physics.add.overlap(this.player, this.burung, () => this.gameOver());
+    // jetpack: item yang bisa diambil, dipakai di punggung kucing
+    this.itemJetpack = this.physics.add.group({ allowGravity: false });
+    this.physics.add.overlap(this.player, this.itemJetpack, (_kucing, item) =>
+      this.ambilJetpack(item as Phaser.GameObjects.GameObject),
+    );
+    this.jetpackPakai = this.add.image(0, 0, "jetpack").setVisible(false);
+    this.apiJetpack = this.add.particles(0, 0, "bintang", {
+      lifespan: { min: 200, max: 380 },
+      speedX: { min: -110, max: -40 },
+      speedY: { min: 90, max: 170 },
+      scale: { start: 3.5, end: 0 },
+      alpha: { start: 1, end: 0 },
+      tint: [0xffd23f, 0xff8a5c, 0xe4572e],
+      frequency: 22,
+      emitting: false,
+    });
+    this.semuaPartikel.push(this.apiJetpack);
     this.spawnTimer = this.time.delayedCall(1200, () => this.spawnObstacle());
     this.jadwalkanIkan();
+    this.jadwalkanBurung();
+    this.jadwalkanJetpack(Phaser.Math.Between(18000, 28000));
 
     // kontrol: spasi, panah atas, atau tap/klik (kecuali saat menekan tombol suara)
     this.spaceKey = this.input.keyboard!.addKey(
@@ -424,14 +489,6 @@ export default class MainScene extends Phaser.Scene {
       .setOrigin(1, 0);
 
     const teksRekor = this.add
-      .text(width - 20, 44, `REKOR ${String(this.rekor).padStart(5, "0")}`, {
-        fontFamily: FONT,
-        fontSize: "10px",
-        color: "#2B2B3A",
-      })
-      .setOrigin(1, 0);
-
-    this.add
       .text(width - 20, 44, `REKOR ${String(this.rekor).padStart(5, "0")}`, {
         fontFamily: FONT,
         fontSize: "10px",
@@ -492,12 +549,30 @@ export default class MainScene extends Phaser.Scene {
       this.game.events.off(Phaser.Core.Events.BLUR, this.jedaOtomatis);
       this.game.events.off(Phaser.Core.Events.HIDDEN, this.jedaOtomatis);
     });
+    // penunjuk sisa waktu jetpack
+    const bingkaiJet = this.add
+      .rectangle(0, 0, 184, 16, 0xffffff, 0.7)
+      .setStrokeStyle(3, 0x2b2b3a);
+    this.barJetpack = this.add
+      .rectangle(-86, 0, 172, 8, 0x4dc3e8)
+      .setOrigin(0, 0.5);
+    const labelJetpack = this.add
+      .text(0, 20, "JETPACK", {
+        fontFamily: FONT,
+        fontSize: "10px",
+        color: "#2B2B3A",
+      })
+      .setOrigin(0.5);
+    this.hudJetpack = this.add
+      .container(width / 2, 74, [bingkaiJet, this.barJetpack, labelJetpack])
+      .setVisible(false);
     this.teksHud = [
       judul,
       this.teksSkor,
       teksRekor,
       this.teksSuara,
       tombolJeda,
+      labelJetpack,
     ];
     this.warnaHud = "";
     this.terapkanSiklus(0);
@@ -506,6 +581,14 @@ export default class MainScene extends Phaser.Scene {
   private spawnObstacle() {
     if (this.selesai) return;
     const { width, height } = this.scale;
+    // beri ruang untuk burung: tunda kalau burung akan atau baru saja masuk dari kanan
+    const burungDekat = this.burung
+      .getChildren()
+      .some((b) => (b as Phaser.GameObjects.Sprite).x > width - 260);
+    if (this.burungAkanDatang || burungDekat) {
+      this.spawnTimer = this.time.delayedCall(500, () => this.spawnObstacle());
+      return;
+    }
     const jenis = Phaser.Utils.Array.GetRandom(JENIS_RINTANGAN);
 
     const rintangan = this.obstacles.create(
@@ -532,7 +615,7 @@ export default class MainScene extends Phaser.Scene {
       Phaser.Math.Between(7000, 12000),
       () => {
         if (this.selesai) return;
-        this.spawnIkan(this.scale.width + 40);
+        if (!this.terbang) this.spawnIkan(this.scale.width + 40);
         this.jadwalkanIkan();
       },
     );
@@ -555,9 +638,234 @@ export default class MainScene extends Phaser.Scene {
     });
   }
 
+  // burung terbang rendah: jarang, dan hanya kalau jalur aman
+  private jadwalkanBurung(tunda = Phaser.Math.Between(5000, 9000)) {
+    this.timerBurung = this.time.delayedCall(tunda, () => {
+      if (this.selesai) return;
+      if (this.terbang) {
+        this.jadwalkanBurung();
+        return;
+      }
+      const { width } = this.scale;
+      if (this.waktuMain < WAKTU_BURUNG_MULAI) {
+        this.jadwalkanBurung();
+        return;
+      }
+      const rintanganDekat = this.obstacles
+        .getChildren()
+        .some((o) => (o as Phaser.GameObjects.Sprite).x > width - 350);
+      if (rintanganDekat) {
+        this.jadwalkanBurung(600); // coba lagi sebentar lagi
+        return;
+      }
+      this.peringatanBurung();
+      this.jadwalkanBurung();
+    });
+  }
+
+  // tanda "!" berkedip di tepi kanan sebelum burung muncul
+  private peringatanBurung() {
+    const { width, height } = this.scale;
+    const y = height - 60 - Phaser.Math.Between(65, 80);
+    this.burungAkanDatang = true;
+
+    const tanda = this.add
+      .text(width - 36, y, "!", {
+        fontFamily: FONT,
+        fontSize: "28px",
+        color: "#E4572E",
+        stroke: "#2B2B3A",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setDepth(8);
+    this.tweens.add({
+      targets: tanda,
+      alpha: 0.15,
+      duration: 100,
+      yoyo: true,
+      repeat: 3,
+    });
+    bunyi(this, 740, 740, 0.09, "square", 0.07);
+    bunyi(this, 740, 740, 0.09, "square", 0.07, 0.18);
+
+    this.time.delayedCall(900, () => {
+      this.tweens.killTweensOf(tanda);
+      tanda.destroy();
+      this.burungAkanDatang = false;
+      if (!this.selesai) this.spawnBurung(y);
+    });
+  }
+
+  private spawnBurung(y: number) {
+    const { width } = this.scale;
+    const burung = this.burung.create(
+      width + 40,
+      y,
+      "burung-1",
+    ) as Phaser.Physics.Arcade.Sprite;
+    burung.setScale(1.5);
+    burung.play("kepak");
+
+    const body = burung.body as Phaser.Physics.Arcade.Body;
+    body.setSize(22, 12); // kotak tabrakan hanya badan, sayap tidak dihitung
+    body.setOffset(5, 8);
+    burung.setVelocityX(-(this.kecepatan + TAMBAHAN_KECEPATAN_BURUNG));
+    burung.setData("yDasar", y);
+    burung.setData("fase", Math.random() * 6);
+  }
+
+  // item jetpack muncul jarang di udara
+  private jadwalkanJetpack(tunda = Phaser.Math.Between(25000, 40000)) {
+    this.timerJetpack = this.time.delayedCall(tunda, () => {
+      if (this.selesai) return;
+      if (this.terbang || this.burungAkanDatang) {
+        this.jadwalkanJetpack(2000);
+        return;
+      }
+      const groundY = this.scale.height - 60;
+      const item = this.itemJetpack.create(
+        this.scale.width + 40,
+        groundY - Phaser.Math.Between(95, 120),
+        "jetpack",
+      ) as Phaser.Physics.Arcade.Sprite;
+      item.setScale(1.5);
+      item.setVelocityX(-this.kecepatan);
+      item.setData("fase", Math.random() * 6);
+      this.jadwalkanJetpack();
+    });
+  }
+
+  private ambilJetpack(item: Phaser.GameObjects.GameObject) {
+    const s = item as Phaser.GameObjects.Sprite;
+    this.percikIkan.explode(14, s.x, s.y);
+    s.destroy();
+    if (this.terbang) {
+      // mengambil lagi saat terbang: waktu terisi penuh
+      this.sisaTerbang = JETPACK_DURASI;
+      this.timerPola?.remove();
+      this.spawnPola();
+      this.jadwalkanPola();
+      return;
+    }
+    this.mulaiTerbang();
+  }
+
+  private mulaiTerbang() {
+    if (this.terbang || this.selesai) return;
+    this.terbang = true;
+    this.sisaTerbang = JETPACK_DURASI;
+    this.bipTerakhir = -1;
+
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(false);
+    body.setVelocityY(-260);
+
+    this.jetpackPakai.setVisible(true);
+    this.apiJetpack.start();
+    this.barJetpack.setScale(1, 1);
+    this.hudJetpack.setVisible(true);
+    bunyi(this, 180, 900, 0.5, "sawtooth", 0.07);
+
+    this.spawnPola();
+    this.jadwalkanPola();
+  }
+
+  private akhiriTerbang() {
+    this.terbang = false;
+    this.kebalSampai = this.waktuMain + 1500; // kebal sebentar saat mendarat
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(true);
+    this.player.setAngle(0);
+    this.jetpackPakai.setVisible(false);
+    this.apiJetpack.stop();
+    this.hudJetpack.setVisible(false);
+    this.timerPola?.remove();
+    bunyi(this, 520, 160, 0.3, "triangle", 0.08);
+  }
+
+  // pola ikan baru tiap 1,4 detik selama jetpack (berhenti 2 detik sebelum habis)
+  private jadwalkanPola() {
+    this.timerPola = this.time.delayedCall(1400, () => {
+      if (!this.terbang || this.selesai) return;
+      if (this.sisaTerbang > 2200) {
+        this.spawnPola();
+        this.jadwalkanPola();
+      }
+    });
+  }
+
+  private spawnPola() {
+    const groundY = this.scale.height - 60;
+    const x0 = this.scale.width + 40;
+    // jarak melebar saat game cepat, supaya kecepatan naik-turun yang dibutuhkan tetap sama
+    const jarak = Phaser.Math.Clamp(
+      46 * (this.kecepatan / KECEPATAN_AWAL),
+      46,
+      90,
+    );
+    const pola = Phaser.Utils.Array.GetRandom(POLA_UDARA);
+
+    // pilih tinggi dasar acak, tapi semua ikan tetap di antara 75 dan 215 px dari tanah
+    const dasar = Array.from({ length: pola.n }, (_, i) => pola.tinggi(i, 0));
+    const aMin = Math.ceil(75 - Math.min(...dasar));
+    const aMax = Math.floor(215 - Math.max(...dasar));
+    const a = Phaser.Math.Between(aMin, aMax);
+
+    for (let i = 0; i < pola.n; i++) {
+      const ikan = this.ikan.create(
+        x0 + i * jarak,
+        groundY - pola.tinggi(i, a),
+        "ikan",
+      ) as Phaser.Physics.Arcade.Sprite;
+      (ikan.body as Phaser.Physics.Arcade.Body).setSize(34, 20);
+      ikan.setVelocityX(-this.kecepatan);
+      ikan.setData("fase", i * 0.6);
+      ikan.setData("nilai", NILAI_IKAN_JETPACK);
+    }
+  }
+
+  // dipanggil tiap frame selama terbang
+  private perbaruiTerbang(time: number, delta: number) {
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    const groundY = this.scale.height - 60;
+    this.sisaTerbang -= delta;
+
+    // tahan = naik, lepas = turun pelan (gerakan dihaluskan)
+    const tahan =
+      this.spaceKey.isDown ||
+      this.upKey.isDown ||
+      this.input.activePointer.isDown;
+    const target = tahan ? -260 : 220;
+    const k = 1 - Math.exp(-delta / 90);
+    let v = Phaser.Math.Linear(body.velocity.y, target, k);
+    if (body.top < 100 && v < 0) v = 0; // batas atas
+    if (body.bottom > groundY - 4 && v > 0) v = 0; // batas bawah
+    body.setVelocityY(v);
+
+    // miring sedikit mengikuti gerak; jetpack dan api menempel di punggung
+    this.player.setAngle(Phaser.Math.Clamp(v * 0.04, -10, 10));
+    this.jetpackPakai
+      .setPosition(this.player.x - 4, this.player.y - 44)
+      .setAngle(this.player.angle);
+    this.apiJetpack.setPosition(this.player.x - 14, this.player.y - 30);
+
+    // bar sisa waktu, lalu kedip dan bip di 1,5 detik terakhir
+    this.barJetpack.setScale(Math.max(0, this.sisaTerbang / JETPACK_DURASI), 1);
+    if (this.sisaTerbang < 1500) {
+      this.player.setAlpha(Math.floor(time / 90) % 2 === 0 ? 1 : 0.4);
+      const bip = Math.ceil(this.sisaTerbang / 300);
+      if (bip !== this.bipTerakhir) {
+        this.bipTerakhir = bip;
+        bunyi(this, 660, 660, 0.06, "square", 0.06);
+      }
+    }
+    if (this.sisaTerbang <= 0) this.akhiriTerbang();
+  }
+
   // tombol dilepas saat kucing masih naik: potong lompatnya
   private lepasLompat() {
-    if (this.selesai) return;
+    if (this.selesai || this.dijeda || this.terbang) return;
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     if (body.velocity.y < -LOMPAT_POTONG) body.setVelocityY(-LOMPAT_POTONG);
   }
@@ -565,15 +873,15 @@ export default class MainScene extends Phaser.Scene {
   private ambilIkan(ikan: Phaser.GameObjects.GameObject) {
     const s = ikan as Phaser.GameObjects.Sprite;
     const { x, y } = s;
+    const nilai = (s.getData("nilai") as number | undefined) ?? NILAI_IKAN;
     s.destroy();
 
-    this.percikIkan.explode(12, x, y);
-
-    this.skor += NILAI_IKAN;
+    this.percikIkan.explode(nilai === NILAI_IKAN ? 12 : 5, x, y);
+    this.skor += nilai;
     bunyi(this, 988, 1319, 0.1, "square", 0.07);
 
     const teks = this.add
-      .text(x, y - 10, "+50", {
+      .text(x, y - 10, `+${nilai}`, {
         fontFamily: FONT,
         fontSize: "12px",
         color: "#FFD23F",
@@ -609,11 +917,21 @@ export default class MainScene extends Phaser.Scene {
   }
 
   private gameOver() {
-    if (this.selesai) return;
+    if (this.selesai || this.terbang || this.waktuMain < this.kebalSampai)
+      return;
     this.selesai = true;
     this.physics.pause();
     this.spawnTimer?.remove();
     this.timerIkan?.remove();
+    this.timerBurung?.remove();
+    this.timerJetpack?.remove();
+    this.timerPola?.remove();
+    this.hudJetpack.setVisible(false);
+    this.apiJetpack.stop();
+    this.jetpackPakai.setVisible(false);
+    this.burung
+      .getChildren()
+      .forEach((b) => (b as Phaser.GameObjects.Sprite).anims.stop());
     this.player.anims.stop();
     this.player.setTint(0xff6b6b);
     this.musik.redam(true);
@@ -632,6 +950,7 @@ export default class MainScene extends Phaser.Scene {
     }
 
     const { width, height } = this.scale;
+
     const cx = width / 2;
     const cy = height / 2;
 
@@ -755,6 +1074,40 @@ export default class MainScene extends Phaser.Scene {
           Math.sin(time / 150 + (o.getData("fase") as number)) * 8;
       });
 
+      // burung terbang sedikit lebih cepat dan melayang naik-turun tipis
+      // burung terbang sedikit lebih cepat dan melayang naik-turun tipis
+      this.burung.getChildren().forEach((o) => {
+        const b = o as Phaser.Physics.Arcade.Sprite;
+        (b.body as Phaser.Physics.Arcade.Body).setVelocityX(
+          -(this.kecepatan + TAMBAHAN_KECEPATAN_BURUNG),
+        );
+        b.y =
+          (b.getData("yDasar") as number) +
+          Math.sin(time / 220 + (b.getData("fase") as number)) * 3;
+      });
+
+      // item jetpack bergerak dan bergoyang pelan
+      this.itemJetpack.getChildren().forEach((o) => {
+        (o.body as Phaser.Physics.Arcade.Body).setVelocityX(-this.kecepatan);
+        (o as Phaser.GameObjects.Sprite).angle =
+          Math.sin(time / 200 + (o.getData("fase") as number)) * 6;
+      });
+
+      // jetpack aktif, atau masa kebal sesudahnya (kucing berkedip)
+      if (this.terbang) {
+        this.perbaruiTerbang(time, delta);
+      } else {
+        this.player.setAlpha(
+          this.waktuMain < this.kebalSampai
+            ? Math.floor(time / 90) % 2 === 0
+              ? 1
+              : 0.4
+            : 1,
+        );
+      }
+
+      // geser latar: lapisan dekat lebih cepat dari yang jauh
+
       // geser latar: lapisan dekat lebih cepat dari yang jauh
       const geser = (this.kecepatan * delta) / 1000;
       this.awan.tilePositionX += geser * 0.1;
@@ -771,7 +1124,21 @@ export default class MainScene extends Phaser.Scene {
         if ((o as Phaser.GameObjects.Sprite).x < -60) o.destroy();
       });
 
+    this.itemJetpack
+      .getChildren()
+      .slice()
+      .forEach((o) => {
+        if ((o as Phaser.GameObjects.Sprite).x < -60) o.destroy();
+      });
+
     this.ikan
+      .getChildren()
+      .slice()
+      .forEach((o) => {
+        if ((o as Phaser.GameObjects.Sprite).x < -60) o.destroy();
+      });
+
+    this.burung
       .getChildren()
       .slice()
       .forEach((o) => {

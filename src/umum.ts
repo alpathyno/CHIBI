@@ -33,16 +33,25 @@ export function simpanRekor(nilai: number) {
 }
 
 export function buatAnimasi(scene: Phaser.Scene) {
-  if (scene.anims.exists("lari")) return;
-  scene.anims.create({
-    key: "lari",
-    frames: scene.anims.generateFrameNumbers(KUCING.key, {
-      start: KUCING.frameAwal,
-      end: KUCING.frameAkhir,
-    }),
-    frameRate: 12,
-    repeat: -1,
-  });
+  if (!scene.anims.exists("lari")) {
+    scene.anims.create({
+      key: "lari",
+      frames: scene.anims.generateFrameNumbers(KUCING.key, {
+        start: KUCING.frameAwal,
+        end: KUCING.frameAkhir,
+      }),
+      frameRate: 12,
+      repeat: -1,
+    });
+  }
+  if (!scene.anims.exists("kepak")) {
+    scene.anims.create({
+      key: "kepak",
+      frames: [{ key: "burung-1" }, { key: "burung-2" }],
+      frameRate: 8,
+      repeat: -1,
+    });
+  }
 }
 
 // mengubah peta teks menjadi tekstur pixel (satu huruf = satu sel warna)
@@ -379,6 +388,166 @@ export function buatTekstur(scene: Phaser.Scene) {
   g.fillRect(0, 2, 6, 2);
   g.fillRect(2, 4, 2, 2);
   g.generateTexture("percik", 6, 6);
+
+  // ===== burung pixel, 2 frame kepakan: 16x12 sel, tiap sel 2px =====
+  const WARNA_BURUNG: Record<string, number> = {
+    o: 0x2b2b3a,
+    y: 0x8e5bd6,
+    l: 0xc9a8ff,
+    s: 0x6b3fb0,
+    k: 0xffd23f,
+    w: 0xffffff,
+  };
+  const buatBurung = (key: string, sayap: "atas" | "bawah") => {
+    const W = 16;
+    const H = 12;
+    const peta: string[][] = Array.from({ length: H }, () =>
+      Array(W).fill("."),
+    );
+    const isi = (rentang: (number[] | null)[], huruf: string) =>
+      rentang.forEach((r, y) => {
+        if (r) for (let x = r[0]; x <= r[1]; x++) peta[y][x] = huruf;
+      });
+
+    // badan, sayap, dan ekor (menghadap kiri)
+    isi(
+      [
+        null,
+        null,
+        null,
+        null,
+        [5, 10],
+        [3, 12],
+        [2, 13],
+        [2, 13],
+        [3, 12],
+        [5, 10],
+        null,
+        null,
+      ],
+      "y",
+    );
+    if (sayap === "atas") {
+      isi(
+        [
+          null,
+          [8, 10],
+          [7, 10],
+          [6, 10],
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+        ],
+        "s",
+      );
+    } else {
+      isi(
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          [6, 11],
+          [8, 11],
+        ],
+        "s",
+      );
+    }
+    isi(
+      [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        [14, 15],
+        [14, 15],
+        null,
+        null,
+        null,
+        null,
+      ],
+      "s",
+    );
+
+    // outline otomatis untuk sel di tepi
+    const ada = (x: number, y: number) =>
+      y >= 0 && y < H && x >= 0 && x < W && peta[y][x] !== ".";
+    const hasil = peta.map((baris, y) =>
+      baris.map((c, x) => {
+        if (c === ".") return ".";
+        const tepi =
+          !ada(x - 1, y) || !ada(x + 1, y) || !ada(x, y - 1) || !ada(x, y + 1);
+        return tepi ? "o" : c;
+      }),
+    );
+
+    // paruh, perut terang, dan mata
+    hasil[6][0] = "k";
+    hasil[6][1] = "k";
+    hasil[7][1] = "k";
+    for (let y = 7; y <= 8; y++)
+      for (let x = 0; x < W; x++) if (hasil[y][x] === "y") hasil[y][x] = "l";
+    hasil[5][5] = "w";
+
+    gambarPeta(
+      g,
+      key,
+      hasil.map((b) => b.join("")),
+      WARNA_BURUNG,
+      2,
+    );
+  };
+  buatBurung("burung-1", "atas");
+  buatBurung("burung-2", "bawah");
+
+  // ===== jetpack pixel: 12x14 sel, tiap sel 2px -> 24x28 =====
+  const WARNA_JETPACK: Record<string, number> = {
+    o: 0x2b2b3a,
+    y: 0xffd23f,
+    c: 0x4dc3e8,
+    h: 0xa8ebff,
+    d: 0x2c8fb5,
+    r: 0xe4572e,
+    m: 0x5c616b,
+    n: 0x8a8f98,
+  };
+  const badanJet = ".o" + "h" + "c".repeat(6) + "d" + "o.";
+  const pitaJet = ".o" + "r".repeat(8) + "o.";
+  gambarPeta(
+    g,
+    "jetpack",
+    [
+      "...oooooo...",
+      "..o" + "y".repeat(6) + "o..",
+      badanJet,
+      badanJet,
+      badanJet,
+      pitaJet,
+      pitaJet,
+      badanJet,
+      badanJet,
+      badanJet,
+      ".o" + "d".repeat(8) + "o.",
+      "..o" + "m".repeat(6) + "o..",
+      "...o" + "n".repeat(4) + "o...",
+      "...oooooo...",
+    ],
+    WARNA_JETPACK,
+    2,
+  );
 
   g.destroy();
 }

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { KUCING, FONT, bacaRekor, buatTekstur, buatAnimasi, bunyiMulai } from "../umum";
+import { ambilMusik } from "../musik";
 
 
 export default class MenuScene extends Phaser.Scene {
@@ -119,6 +120,7 @@ export default class MenuScene extends Phaser.Scene {
     if (this.sudahMulai) return;
     this.sudahMulai = true;
     bunyiMulai(this);
+    ambilMusik(this).mulai();
     this.cameras.main.fadeOut(250, 43, 43, 58);
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MainScene'));
   }

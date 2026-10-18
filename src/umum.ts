@@ -200,7 +200,7 @@ export function buatTekstur(scene: Phaser.Scene) {
   );
   g.generateTexture("ikan", 20 * SEL, 12 * SEL);
 
-    // ===== rintangan pixel (tiap sel 2px) =====
+  // ===== rintangan pixel (tiap sel 2px) =====
   const WARNA_RINTANGAN: Record<string, number> = {
     o: 0x2b2b3a, // outline
     // kardus
@@ -279,8 +279,17 @@ export function buatTekstur(scene: Phaser.Scene) {
 
   // pot tanaman: semak (dibuat dari rentang kolom + outline otomatis) di atas pot
   const semak = [
-    [5, 8], [4, 9], [3, 10], [2, 11], [1, 12], [1, 12],
-    [1, 12], [2, 11], [3, 10], [5, 8], [6, 7],
+    [5, 8],
+    [4, 9],
+    [3, 10],
+    [2, 11],
+    [1, 12],
+    [1, 12],
+    [1, 12],
+    [2, 11],
+    [3, 10],
+    [5, 8],
+    [6, 7],
   ];
   const isiSemak = semak.map((r) =>
     Array.from({ length: 14 }, (_, x) => x >= r[0] && x <= r[1]),
@@ -291,13 +300,26 @@ export function buatTekstur(scene: Phaser.Scene) {
     baris.map((terisi, x) => {
       if (!terisi) return ".";
       const tepi =
-        !adaSemak(x - 1, y) || !adaSemak(x + 1, y) || !adaSemak(x, y - 1) || !adaSemak(x, y + 1);
+        !adaSemak(x - 1, y) ||
+        !adaSemak(x + 1, y) ||
+        !adaSemak(x, y - 1) ||
+        !adaSemak(x, y + 1);
       if (tepi) return "o";
       return y >= 6 ? "k" : "g"; // bagian bawah semak lebih gelap
     }),
   );
-  [[6, 2], [7, 2], [5, 3], [8, 3], [6, 4], [7, 4]].forEach(([x, y]) => (petaSemak[y][x] = "f"));
-  [[6, 3], [7, 3]].forEach(([x, y]) => (petaSemak[y][x] = "y")); // putik bunga
+  [
+    [6, 2],
+    [7, 2],
+    [5, 3],
+    [8, 3],
+    [6, 4],
+    [7, 4],
+  ].forEach(([x, y]) => (petaSemak[y][x] = "f"));
+  [
+    [6, 3],
+    [7, 3],
+  ].forEach(([x, y]) => (petaSemak[y][x] = "y")); // putik bunga
 
   const petaPot = [
     "." + "o".repeat(12) + ".",
@@ -308,7 +330,55 @@ export function buatTekstur(scene: Phaser.Scene) {
     ...Array(2).fill("...o" + "e" + "p".repeat(4) + "u" + "o..."),
     "...oooooooo...",
   ];
-  gambarPeta(g, "pot", [...petaSemak.map((b) => b.join("")), ...petaPot], WARNA_RINTANGAN, 2);
+  gambarPeta(
+    g,
+    "pot",
+    [...petaSemak.map((b) => b.join("")), ...petaPot],
+    WARNA_RINTANGAN,
+    2,
+  );
+
+  // ===== benda langit =====
+  // bintang: kotak putih kecil (diperbesar 1-3x di game)
+  g.clear();
+  g.fillStyle(0xffffff);
+  g.fillRect(0, 0, 2, 2);
+  g.generateTexture("bintang", 2, 2);
+
+  // matahari: lingkaran pixel 12x12 sel, tiap sel 4px
+  g.clear();
+  for (let y = 0; y < 12; y++) {
+    for (let x = 0; x < 12; x++) {
+      const d = Math.hypot(x - 5.5, y - 5.5);
+      if (d <= 5.6) {
+        g.fillStyle(d <= 3.6 ? 0xffe680 : 0xffc21a);
+        g.fillRect(x * 4, y * 4, 4, 4);
+      }
+    }
+  }
+  g.generateTexture("matahari", 48, 48);
+
+  // bulan sabit: lingkaran dikurangi lingkaran lain yang bergeser
+  g.clear();
+  for (let y = 0; y < 12; y++) {
+    for (let x = 0; x < 12; x++) {
+      const d = Math.hypot(x - 5.5, y - 5.5);
+      const potong = Math.hypot(x - 8, y - 4);
+      if (d <= 5.6 && potong > 4.6) {
+        g.fillStyle(0xf4f1de);
+        g.fillRect(x * 4, y * 4, 4, 4);
+      }
+    }
+  }
+  g.generateTexture("bulan", 48, 48);
+
+  // percikan: tanda plus kecil 6x6
+  g.clear();
+  g.fillStyle(0xffffff);
+  g.fillRect(2, 0, 2, 2);
+  g.fillRect(0, 2, 6, 2);
+  g.fillRect(2, 4, 2, 2);
+  g.generateTexture("percik", 6, 6);
 
   g.destroy();
 }

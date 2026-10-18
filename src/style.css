@@ -1,14 +1,16 @@
 html, body {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: #2B2B3A;
 }
 
 #game {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
 }
 
 canvas {
+  display: block;
   image-rendering: pixelated;
 }

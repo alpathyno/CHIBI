@@ -23,12 +23,25 @@ const JENIS_RINTANGAN = [
   { key: "ember", lebar: 22, tinggi: 30, offX: 3, offY: 4 },
   { key: "pot", lebar: 22, tinggi: 42, offX: 3, offY: 4 },
 ];
+type Jenis = (typeof JENIS_RINTANGAN)[number];
+type Kelompok = { jenis: Jenis[]; gap: number[]; span: number };
+
+const WAKTU_POLA_MULAI = 25000; // ms: kelompok rintangan mulai muncul setelah 25 detik
+const MARGIN_POLA = 0.6; // kelompok hanya boleh memakai 60% waktu "di udara" lompatan penuh
 const PANJANG_SIKLUS = 100000; // milidetik: 100 detik untuk satu putaran penuh
 const WAKTU_BURUNG_MULAI = 15000; // ms: burung mulai muncul setelah 15 detik
 const TAMBAHAN_KECEPATAN_BURUNG = 70; // burung terbang sedikit lebih cepat dari dunia
 
 const JETPACK_DURASI = 5000; // ms
 const NILAI_IKAN_JETPACK = 10;
+const BONUS_BARISAN = 30; // bonus kalau ketiga ikan dalam satu barisan terambil semua
+const BONUS_POLA = 50; // bonus kalau semua ikan dalam satu pola jetpack terambil
+type StatusKelompok = {
+  total: number;
+  terambil: number;
+  bonus: number;
+  label: string;
+};
 
 // pola ikan di udara saat jetpack: n = jumlah ikan, tinggi(i, a) = ketinggian ikan ke-i
 const POLA_UDARA: { n: number; tinggi: (i: number, a: number) => number }[] = [
@@ -120,6 +133,11 @@ export default class MainScene extends Phaser.Scene {
   private awan!: Phaser.GameObjects.TileSprite;
   private bukitJauh!: Phaser.GameObjects.TileSprite;
   private bukitDekat!: Phaser.GameObjects.TileSprite;
+  private jumlahIkan = 0;
+  private teksIkan!: Phaser.GameObjects.Text;
+  private ikonIkan!: Phaser.GameObjects.Image;
+  private kelompokIkan = new Map<number, StatusKelompok>();
+  private idKelompok = 0;
   private tanah!: Phaser.GameObjects.TileSprite;
   private ikan!: Phaser.Physics.Arcade.Group;
   private teksHud: Phaser.GameObjects.Text[] = [];
@@ -299,6 +317,9 @@ export default class MainScene extends Phaser.Scene {
     this.skor = 0;
     this.burungAkanDatang = false;
     this.waktuMain = 0;
+    this.jumlahIkan = 0;
+    this.idKelompok = 0;
+    this.kelompokIkan.clear();
     this.terbang = false;
     this.sisaTerbang = 0;
     this.bipTerakhir = -1;
@@ -496,6 +517,17 @@ export default class MainScene extends Phaser.Scene {
       })
       .setOrigin(1, 0);
 
+    // penghitung ikan di bawah rekor
+    this.teksIkan = this.add
+      .text(width - 20, 66, "x00", {
+        fontFamily: FONT,
+        fontSize: "10px",
+        color: "#2B2B3A",
+      })
+      .setOrigin(1, 0);
+    this.ikonIkan = this.add.image(0, 71, "ikan").setScale(0.7);
+    this.perbaruiHitunganIkan();
+
     this.teksSuara = this.add
       .text(20, 20, "", {
         fontFamily: FONT,
@@ -570,12 +602,59 @@ export default class MainScene extends Phaser.Scene {
       judul,
       this.teksSkor,
       teksRekor,
+      this.teksIkan,
       this.teksSuara,
       tombolJeda,
       labelJetpack,
     ];
     this.warnaHud = "";
     this.terapkanSiklus(0);
+  }
+
+  // lebar maksimum satu kelompok rintangan agar masih bisa dilewati satu lompatan penuh
+  private spanMaks(tinggi: number): number {
+    const g = this.physics.world.gravity.y;
+    const sisa = LOMPAT_PENUH * LOMPAT_PENUH - 2 * g * tinggi;
+    if (sisa <= 0) return 0;
+    // lama kaki kucing berada di atas tinggi rintangan, dalam detik
+    const lamaDiAtas = (2 * Math.sqrt(sisa)) / g;
+    const lebarKucing = KUCING.hitbox.lebar * KUCING.skala;
+    return MARGIN_POLA * this.kecepatan * lamaDiAtas - lebarKucing;
+  }
+
+  // tentukan satu rintangan biasa atau kelompok 2-3 rintangan yang berdekatan
+  private buatKelompok(): Kelompok {
+    const satu = Phaser.Utils.Array.GetRandom(JENIS_RINTANGAN) as Jenis;
+    const biasa: Kelompok = { jenis: [satu], gap: [], span: satu.lebar };
+
+    // peluang kelompok naik pelan seiring waktu bermain
+    const peluang =
+      this.waktuMain < WAKTU_POLA_MULAI
+        ? 0
+        : Phaser.Math.Clamp(
+            (this.waktuMain - WAKTU_POLA_MULAI) / 150000 + 0.2,
+            0.2,
+            0.5,
+          );
+    if (Math.random() >= peluang) return biasa;
+
+    // coba 3 rintangan (jarang) atau 2; kalau terlalu lebar, kecilkan jumlahnya
+    let jumlah = Phaser.Math.Between(1, 100) <= 30 ? 3 : 2;
+    while (jumlah >= 2) {
+      const jenis = Array.from(
+        { length: jumlah },
+        () => Phaser.Utils.Array.GetRandom(JENIS_RINTANGAN) as Jenis,
+      );
+      const gap = Array.from({ length: jumlah - 1 }, () =>
+        Phaser.Math.Between(24, 44),
+      );
+      const span =
+        jenis.reduce((s, j) => s + j.lebar, 0) + gap.reduce((s, g) => s + g, 0);
+      const tinggiMaks = Math.max(...jenis.map((j) => j.tinggi));
+      if (span <= this.spanMaks(tinggiMaks)) return { jenis, gap, span };
+      jumlah--;
+    }
+    return biasa;
   }
 
   private spawnObstacle() {
@@ -589,22 +668,32 @@ export default class MainScene extends Phaser.Scene {
       this.spawnTimer = this.time.delayedCall(500, () => this.spawnObstacle());
       return;
     }
-    const jenis = Phaser.Utils.Array.GetRandom(JENIS_RINTANGAN);
 
-    const rintangan = this.obstacles.create(
-      width + 40,
-      height - 60,
-      jenis.key,
-    ) as Phaser.Physics.Arcade.Sprite;
-    rintangan.setOrigin(0.5, 1);
+    // satu rintangan, atau kelompok 2-3 rintangan berdekatan
+    const kelompok = this.buatKelompok();
+    let xKiri = width + 40; // tepi kiri kotak tabrakan rintangan berikutnya
+    kelompok.jenis.forEach((jenis, i) => {
+      const rintangan = this.obstacles.create(
+        xKiri + jenis.lebar / 2,
+        height - 60,
+        jenis.key,
+      ) as Phaser.Physics.Arcade.Sprite;
+      rintangan.setOrigin(0.5, 1);
 
-    const body = rintangan.body as Phaser.Physics.Arcade.Body;
-    body.setSize(jenis.lebar, jenis.tinggi);
-    body.setOffset(jenis.offX, jenis.offY);
-    body.setVelocityX(-this.kecepatan);
+      const body = rintangan.body as Phaser.Physics.Arcade.Body;
+      body.setSize(jenis.lebar, jenis.tinggi);
+      body.setOffset(jenis.offX, jenis.offY);
+      body.setVelocityX(-this.kecepatan);
 
+      xKiri += jenis.lebar + (kelompok.gap[i] ?? 0);
+    });
+
+    // setelah kelompok, beri jeda lebih lama supaya kucing sempat mendarat
+    const tambahan =
+      (kelompok.span / this.kecepatan) * 1000 +
+      (kelompok.jenis.length > 1 ? 400 : 0);
     this.spawnTimer = this.time.delayedCall(
-      Phaser.Math.Between(1100, 2000),
+      Phaser.Math.Between(1100, 2000) + tambahan,
       () => this.spawnObstacle(),
     );
   }
@@ -622,10 +711,18 @@ export default class MainScene extends Phaser.Scene {
   }
 
   // tiga ikan melayang tinggi, hanya terjangkau kalau spasi ditahan lama
+  // tiga ikan melayang tinggi, hanya terjangkau kalau spasi ditahan lama
   private spawnIkan(xTengah: number) {
     const groundY = this.scale.height - 60;
     const tinggiDasar = Phaser.Math.Between(120, 140);
     const lengkung = [0, 12, 0]; // tengah sedikit lebih tinggi
+    const id = ++this.idKelompok;
+    this.kelompokIkan.set(id, {
+      total: lengkung.length,
+      terambil: 0,
+      bonus: BONUS_BARISAN,
+      label: "COMBO!",
+    });
     lengkung.forEach((tambah, i) => {
       const ikan = this.ikan.create(
         xTengah + (i - 1) * 52,
@@ -635,6 +732,7 @@ export default class MainScene extends Phaser.Scene {
       (ikan.body as Phaser.Physics.Arcade.Body).setSize(34, 20);
       ikan.setVelocityX(-this.kecepatan);
       ikan.setData("fase", i * 1.2);
+      ikan.setData("kelompok", id);
     });
   }
 
@@ -812,6 +910,14 @@ export default class MainScene extends Phaser.Scene {
     const aMax = Math.floor(215 - Math.max(...dasar));
     const a = Phaser.Math.Between(aMin, aMax);
 
+    const id = ++this.idKelompok;
+    this.kelompokIkan.set(id, {
+      total: pola.n,
+      terambil: 0,
+      bonus: BONUS_POLA,
+      label: "SEMPURNA!",
+    });
+
     for (let i = 0; i < pola.n; i++) {
       const ikan = this.ikan.create(
         x0 + i * jarak,
@@ -822,6 +928,7 @@ export default class MainScene extends Phaser.Scene {
       ikan.setVelocityX(-this.kecepatan);
       ikan.setData("fase", i * 0.6);
       ikan.setData("nilai", NILAI_IKAN_JETPACK);
+      ikan.setData("kelompok", id);
     }
   }
 
@@ -870,33 +977,91 @@ export default class MainScene extends Phaser.Scene {
     if (body.velocity.y < -LOMPAT_POTONG) body.setVelocityY(-LOMPAT_POTONG);
   }
 
-  private ambilIkan(ikan: Phaser.GameObjects.GameObject) {
-    const s = ikan as Phaser.GameObjects.Sprite;
-    const { x, y } = s;
-    const nilai = (s.getData("nilai") as number | undefined) ?? NILAI_IKAN;
-    s.destroy();
+  // perbarui tulisan jumlah ikan dan posisi ikonnya di sebelah kiri tulisan
+  private perbaruiHitunganIkan() {
+    this.teksIkan.setText(`x${String(this.jumlahIkan).padStart(2, "0")}`);
+    this.ikonIkan.setX(this.teksIkan.x - this.teksIkan.width - 18);
+  }
 
-    this.percikIkan.explode(nilai === NILAI_IKAN ? 12 : 5, x, y);
-    this.skor += nilai;
-    bunyi(this, 988, 1319, 0.1, "square", 0.07);
-
-    const teks = this.add
-      .text(x, y - 10, `+${nilai}`, {
+  // tulisan yang melayang naik lalu memudar
+  private teksMelayang(
+    x: number,
+    y: number,
+    isi: string,
+    warna: string,
+    ukuran = "12px",
+    durasi = 600,
+  ) {
+    const t = this.add
+      .text(x, y, isi, {
         fontFamily: FONT,
-        fontSize: "12px",
-        color: "#FFD23F",
+        fontSize: ukuran,
+        color: warna,
         stroke: "#2B2B3A",
         strokeThickness: 4,
       })
       .setOrigin(0.5)
       .setDepth(5);
     this.tweens.add({
-      targets: teks,
-      y: y - 50,
+      targets: t,
+      y: y - 40,
       alpha: 0,
-      duration: 600,
-      onComplete: () => teks.destroy(),
+      duration: durasi,
+      onComplete: () => t.destroy(),
     });
+  }
+
+  private ambilIkan(ikan: Phaser.GameObjects.GameObject) {
+    const s = ikan as Phaser.GameObjects.Sprite;
+    const { x, y } = s;
+    const nilai = (s.getData("nilai") as number | undefined) ?? NILAI_IKAN;
+    const id = s.getData("kelompok") as number | undefined;
+    s.destroy();
+
+    // penghitung ikan di pojok, ikonnya berdenyut
+    this.jumlahIkan += 1;
+    this.perbaruiHitunganIkan();
+    this.tweens.killTweensOf(this.ikonIkan);
+    this.ikonIkan.setScale(0.7);
+    this.tweens.add({
+      targets: this.ikonIkan,
+      scale: 1,
+      duration: 90,
+      yoyo: true,
+    });
+
+    // hitung berapa ikan dalam barisan ini yang sudah terambil
+    const kel = id !== undefined ? this.kelompokIkan.get(id) : undefined;
+    let terambil = 1;
+    if (kel) {
+      kel.terambil += 1;
+      terambil = kel.terambil;
+    }
+
+    this.percikIkan.explode(nilai === NILAI_IKAN ? 12 : 5, x, y);
+    this.skor += nilai;
+    // makin banyak ikan berurutan, makin tinggi nadanya
+    const nada = 988 * Math.pow(1.06, Math.min(terambil - 1, 8));
+    bunyi(this, nada, nada * 1.33, 0.1, "square", 0.07);
+    this.teksMelayang(x, y - 10, `+${nilai}`, "#FFD23F");
+
+    // semua ikan dalam barisan terambil: bonus
+    if (kel && id !== undefined && kel.terambil === kel.total) {
+      this.kelompokIkan.delete(id);
+      this.skor += kel.bonus;
+      this.percikIkan.explode(22, x, y);
+      bunyi(this, 784, 784, 0.08, "square", 0.08, 0.1);
+      bunyi(this, 988, 988, 0.08, "square", 0.08, 0.18);
+      bunyi(this, 1319, 1568, 0.2, "square", 0.08, 0.26);
+      this.teksMelayang(
+        x,
+        y - 42,
+        `${kel.label} +${kel.bonus}`,
+        "#FF7BAC",
+        "14px",
+        1000,
+      );
+    }
   }
 
   // satu aksi untuk semua input: lompat saat main, mulai ulang saat game over
@@ -967,7 +1132,7 @@ export default class MainScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(11);
     this.add
-      .text(cx, cy - 18, `SKOR: ${skorAkhir}`, {
+      .text(cx, cy - 18, `SKOR: ${skorAkhir}   IKAN: ${this.jumlahIkan}`, {
         fontFamily: FONT,
         fontSize: "14px",
         color: "#2B2B3A",

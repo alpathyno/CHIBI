@@ -147,6 +147,10 @@ export default class MainScene extends Phaser.Scene {
   private burung!: Phaser.Physics.Arcade.Group;
   private timerBurung?: Phaser.Time.TimerEvent;
   private burungAkanDatang = false;
+  private squash = { fx: 1, fy: 1 };
+  private fxTerakhir = 1;
+  private fyTerakhir = 1;
+  private kecepatanJatuh = 0;
   private bulan!: Phaser.GameObjects.Image;
   private debuLari!: Phaser.GameObjects.Particles.ParticleEmitter;
   private debuMendarat!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -317,6 +321,11 @@ export default class MainScene extends Phaser.Scene {
     this.skor = 0;
     this.burungAkanDatang = false;
     this.waktuMain = 0;
+    this.squash.fx = 1;
+    this.squash.fy = 1;
+    this.fxTerakhir = 1;
+    this.fyTerakhir = 1;
+    this.kecepatanJatuh = 0;
     this.jumlahIkan = 0;
     this.idKelompok = 0;
     this.kelompokIkan.clear();
@@ -977,6 +986,55 @@ export default class MainScene extends Phaser.Scene {
     if (body.velocity.y < -LOMPAT_POTONG) body.setVelocityY(-LOMPAT_POTONG);
   }
 
+  // ubah skala kucing tanpa mengubah kotak tabrakannya (untuk squash & stretch)
+  private aturSkalaKucing(fx: number, fy: number) {
+    const sx = KUCING.skala * fx;
+    const sy = KUCING.skala * fy;
+    this.player.setScale(sx, sy);
+
+    // kotak tabrakan dijaga tetap sama besar dan sama posisinya di layar
+    const h = KUCING.hitbox;
+    const lebar = h.lebar * KUCING.skala;
+    const tinggi = h.tinggi * KUCING.skala;
+    const kiri = (KUCING.frameWidth / 2 - h.x) * KUCING.skala; // tepi kiri kotak ke titik tengah sprite
+    const bawah = (KUCING.frameHeight - h.y - h.tinggi) * KUCING.skala; // dasar kotak ke dasar sprite
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    body.setSize(lebar / sx, tinggi / sy);
+    body.setOffset(
+      KUCING.frameWidth / 2 - kiri / sx,
+      KUCING.frameHeight - bawah / sy - tinggi / sy,
+    );
+  }
+
+  // melompat: badan memanjang lalu kembali normal
+  private regangkanKucing() {
+    this.tweens.killTweensOf(this.squash);
+    this.squash.fx = 0.88;
+    this.squash.fy = 1.14;
+    this.tweens.add({
+      targets: this.squash,
+      fx: 1,
+      fy: 1,
+      duration: 260,
+      ease: "Sine.easeOut",
+    });
+  }
+
+  // mendarat: badan memipih lalu memantul kembali; makin cepat jatuh, makin pipih
+  private pipihkanKucing(kecepatanJatuh: number) {
+    const k = Phaser.Math.Clamp(kecepatanJatuh / 600, 0.25, 1);
+    this.tweens.killTweensOf(this.squash);
+    this.squash.fx = 1 + 0.15 * k;
+    this.squash.fy = 1 - 0.15 * k;
+    this.tweens.add({
+      targets: this.squash,
+      fx: 1,
+      fy: 1,
+      duration: 280,
+      ease: "Back.easeOut",
+    });
+  }
+
   // perbarui tulisan jumlah ikan dan posisi ikonnya di sebelah kiri tulisan
   private perbaruiHitunganIkan() {
     this.teksIkan.setText(`x${String(this.jumlahIkan).padStart(2, "0")}`);
@@ -1077,6 +1135,7 @@ export default class MainScene extends Phaser.Scene {
     if (body.blocked.down || body.touching.down) {
       body.setVelocityY(-LOMPAT_PENUH);
       bunyi(this, 280, 620, 0.12, "square");
+      this.regangkanKucing();
       this.debuMendarat.explode(5, this.player.x - 10, this.scale.height - 62);
     }
   }
@@ -1099,6 +1158,8 @@ export default class MainScene extends Phaser.Scene {
       .forEach((b) => (b as Phaser.GameObjects.Sprite).anims.stop());
     this.player.anims.stop();
     this.player.setTint(0xff6b6b);
+    this.tweens.killTweensOf(this.squash);
+    this.aturSkalaKucing(1.2, 0.8); // gepeng saat menabrak
     this.musik.redam(true);
     this.debuLari.stop();
     const badan = this.player.body as Phaser.Physics.Arcade.Body;
@@ -1209,6 +1270,9 @@ export default class MainScene extends Phaser.Scene {
       // pose kucing: berlari di tanah, pose khusus saat melayang
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       const diTanah = body.blocked.down || body.touching.down;
+      // simpan kecepatan jatuh terakhir: makin cepat jatuh, makin pipih saat mendarat
+      if (!this.sebelumnyaDiTanah || !diTanah)
+        this.kecepatanJatuh = body.velocity.y;
       // puff saat mendarat, dan debu mengalir selama di tanah
       if (diTanah && !this.sebelumnyaDiTanah) {
         this.debuMendarat.explode(
@@ -1216,6 +1280,7 @@ export default class MainScene extends Phaser.Scene {
           this.player.x - 10,
           this.scale.height - 62,
         );
+        this.pipihkanKucing(this.kecepatanJatuh);
       }
       this.sebelumnyaDiTanah = diTanah;
       if (diTanah && !this.debuLari.emitting) this.debuLari.start();
@@ -1226,6 +1291,16 @@ export default class MainScene extends Phaser.Scene {
       } else if (this.player.anims.isPlaying) {
         this.player.anims.stop();
         this.player.setFrame(KUCING.frameLompat);
+      }
+
+      // terapkan squash & stretch (hanya saat nilainya berubah)
+      if (
+        this.squash.fx !== this.fxTerakhir ||
+        this.squash.fy !== this.fyTerakhir
+      ) {
+        this.aturSkalaKucing(this.squash.fx, this.squash.fy);
+        this.fxTerakhir = this.squash.fx;
+        this.fyTerakhir = this.squash.fy;
       }
 
       // semua rintangan ikut kecepatan terbaru

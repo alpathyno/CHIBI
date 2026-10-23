@@ -11,6 +11,16 @@ import {
 } from "../umum";
 import { ambilMusik, Musik } from "../musik";
 
+// kalikan dua warna (seperti tint): hasilnya lebih gelap dari keduanya
+function kaliWarna(c1: number, c2: number): number {
+  const k = (a: number, b: number) => Math.round((a * b) / 255);
+  return Phaser.Display.Color.GetColor(
+    k((c1 >> 16) & 255, (c2 >> 16) & 255),
+    k((c1 >> 8) & 255, (c2 >> 8) & 255),
+    k(c1 & 255, c2 & 255),
+  );
+}
+
 // pengaturan kecepatan (piksel per detik)
 const KECEPATAN_AWAL = 320;
 const KECEPATAN_MAKS = 720;
@@ -142,6 +152,16 @@ export default class MainScene extends Phaser.Scene {
   private ikan!: Phaser.Physics.Arcade.Group;
   private teksHud: Phaser.GameObjects.Text[] = [];
   private bintang: Phaser.GameObjects.Image[] = [];
+  private hujan = 0; // intensitas hujan saat ini (0 sampai 1)
+  private targetHujan = 0;
+  private timerCuaca?: Phaser.Time.TimerEvent;
+  private emiterHujan!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private percikHujan!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private lajuCuaca = 2500; // ms: makin besar, hujan datang/reda makin lambat
+  private frekHujan = 6;
+  private tingkatMalam = 0;
+  private timerPetir?: Phaser.Time.TimerEvent;
+  private kilat!: Phaser.GameObjects.Rectangle;
   private matahari!: Phaser.GameObjects.Image;
   private waktuMain = 0;
   private burung!: Phaser.Physics.Arcade.Group;
@@ -272,24 +292,35 @@ export default class MainScene extends Phaser.Scene {
       );
     };
 
-    // langit dan lapisan latar
-    this.cameras.main.setBackgroundColor(campur(a.langit, b.langit, f));
+    // langit dan lapisan latar (lebih kelabu dan gelap saat hujan)
+    this.cameras.main.setBackgroundColor(
+      kaliWarna(
+        campur(a.langit, b.langit, f),
+        campur(0xffffff, 0x9aa3b8, this.hujan),
+      ),
+    );
     const tint = campur(a.tint, b.tint, f);
-    [this.awan, this.bukitJauh, this.bukitDekat, this.tanah].forEach((t) =>
-      t.setTint(tint),
+    this.awan.setTint(kaliWarna(tint, campur(0xffffff, 0x727a8c, this.hujan)));
+    const redupDarat = kaliWarna(tint, campur(0xffffff, 0xb4bccc, this.hujan));
+    [this.bukitJauh, this.bukitDekat, this.tanah].forEach((t) =>
+      t.setTint(redupDarat),
     );
 
     // bintang berkelap-kelip, matahari dan bulan naik-turun
     const terangBintang = lerp(a.bintang, b.bintang);
+    this.tingkatMalam = terangBintang;
     this.musik.setMalam(terangBintang);
     this.bintang.forEach((s) =>
       s.setAlpha(
         terangBintang *
+          (1 - this.hujan * 0.85) *
           (0.6 + 0.4 * Math.sin(time / 300 + (s.getData("fase") as number))),
       ),
     );
     this.matahari.y = lerp(a.surya, b.surya);
     this.bulan.y = lerp(a.bulan, b.bulan);
+    this.matahari.setAlpha(1 - this.hujan * 0.75);
+    this.bulan.setAlpha(1 - this.hujan * 0.75);
 
     // teks HUD: gelap saat siang, putih saat malam
     const terang = Math.min(1, terangBintang * 2.5);
@@ -310,6 +341,127 @@ export default class MainScene extends Phaser.Scene {
     }
   }
 
+  // cuaca bergantian: cerah, lalu hujan, lalu cerah lagi
+  // cuaca berubah secara acak: tidak ada pola yang mudah ditebak
+  private jadwalkanCuaca(tunda: number) {
+    this.timerCuaca = this.time.delayedCall(tunda, () => {
+      if (this.selesai) return;
+
+      if (this.targetHujan === 0) {
+        // mulai hujan: sepertiganya hanya gerimis, sisanya deras
+        this.targetHujan =
+          Math.random() < 0.35
+            ? Phaser.Math.FloatBetween(0.3, 0.5)
+            : Phaser.Math.FloatBetween(0.6, 1);
+        this.lajuCuaca = Phaser.Math.Between(1500, 4500);
+        this.jadwalkanCuaca(Phaser.Math.Between(9000, 40000));
+      } else if (Math.random() < 0.4) {
+        // masih hujan, tapi intensitasnya berubah dulu
+        this.targetHujan = Phaser.Math.FloatBetween(0.3, 1);
+        this.lajuCuaca = Phaser.Math.Between(2000, 5000);
+        this.jadwalkanCuaca(Phaser.Math.Between(6000, 20000));
+      } else {
+        // reda; jeda cerah bervariasi: sering pendek, kadang panjang
+        this.targetHujan = 0;
+        this.lajuCuaca = Phaser.Math.Between(2500, 6000);
+        const acak = Math.pow(Math.random(), 1.6);
+        this.jadwalkanCuaca(Math.round(Phaser.Math.Linear(14000, 90000, acak)));
+      }
+    });
+  }
+
+  // intensitas hujan naik atau turun pelan-pelan menuju targetnya
+  // intensitas hujan naik atau turun pelan-pelan menuju targetnya
+  private perbaruiCuaca(delta: number) {
+    const selisih = this.targetHujan - this.hujan;
+    this.hujan =
+      Math.abs(selisih) < 0.004
+        ? this.targetHujan
+        : this.hujan + selisih * (1 - Math.exp(-delta / this.lajuCuaca));
+
+    const turun = this.hujan > 0.03;
+    if (turun && !this.emiterHujan.emitting) {
+      this.emiterHujan.start();
+      this.percikHujan.start();
+    } else if (!turun && this.emiterHujan.emitting) {
+      this.emiterHujan.stop();
+      this.percikHujan.stop();
+    }
+
+    // gerimis lebih jarang tetesannya, hujan deras lebih rapat
+    const frek = Math.round(Phaser.Math.Linear(24, 6, this.hujan));
+    if (Math.abs(frek - this.frekHujan) >= 2) {
+      this.frekHujan = frek;
+      this.emiterHujan.setFrequency(frek, 1);
+      this.percikHujan.setFrequency(frek * 4, 1);
+    }
+
+    this.emiterHujan.setAlpha(this.hujan);
+    this.percikHujan.setAlpha(this.hujan);
+    this.musik.setHujan(this.hujan);
+  }
+
+  // petir hanya terjadi saat malam dan hujan cukup deras
+  private jadwalkanPetir() {
+    this.timerPetir = this.time.delayedCall(
+      Phaser.Math.Between(4000, 13000),
+      () => {
+        if (this.selesai) return;
+        const cocok = this.hujan > 0.55 && this.tingkatMalam > 0.6;
+        if (cocok && Math.random() < 0.75) this.sambarPetir();
+        this.jadwalkanPetir();
+      },
+    );
+  }
+
+  private sambarPetir() {
+    const { width, height } = this.scale;
+    const groundY = height - 60;
+
+    // jalur zig-zag dari atas ke arah bukit
+    let x = Phaser.Math.Between(
+      Math.round(width * 0.15),
+      Math.round(width * 0.85),
+    );
+    let y = 0;
+    const titik = [{ x, y }];
+    while (y < groundY - 90) {
+      y += Phaser.Math.Between(22, 40);
+      x += Phaser.Math.Between(-26, 26);
+      titik.push({ x, y });
+    }
+
+    // digambar di belakang awan dan bukit
+    const petir = this.add.graphics().setDepth(-1);
+    const gambar = (tebal: number, warna: number) => {
+      petir.lineStyle(tebal, warna, 1);
+      petir.beginPath();
+      petir.moveTo(titik[0].x, titik[0].y);
+      titik.forEach((p) => petir.lineTo(p.x, p.y));
+      petir.strokePath();
+    };
+    gambar(6, 0xfff3b0);
+    gambar(2, 0xffffff);
+
+    // dua kilatan: kuat lalu lebih lemah
+    this.tweens.add({
+      targets: this.kilat,
+      alpha: { from: 0.75, to: 0 },
+      duration: 140,
+    });
+    this.time.delayedCall(170, () => {
+      this.tweens.add({
+        targets: this.kilat,
+        alpha: { from: 0.45, to: 0 },
+        duration: 260,
+      });
+    });
+    this.time.delayedCall(420, () => petir.destroy());
+
+    // gemuruh menyusul, jeda acak seperti petir yang jauh atau dekat
+    this.musik.gemuruh(Phaser.Math.FloatBetween(0.3, 1.2));
+  }
+
   create() {
     const { width, height } = this.scale;
     const groundY = height - 60;
@@ -321,6 +473,11 @@ export default class MainScene extends Phaser.Scene {
     this.skor = 0;
     this.burungAkanDatang = false;
     this.waktuMain = 0;
+    this.hujan = 0;
+    this.lajuCuaca = 2500;
+    this.frekHujan = 6;
+    this.tingkatMalam = 0;
+    this.targetHujan = 0;
     this.squash.fx = 1;
     this.squash.fy = 1;
     this.fxTerakhir = 1;
@@ -343,6 +500,7 @@ export default class MainScene extends Phaser.Scene {
     this.musik.jeda(false);
     this.musik.redam(false);
     this.musik.setMalam(0, true);
+    this.musik.setHujan(0, true);
 
     // latar berlapis: yang jauh bergerak pelan, yang dekat lebih cepat
     buatTekstur(this);
@@ -475,10 +633,56 @@ export default class MainScene extends Phaser.Scene {
       emitting: false,
     });
     this.semuaPartikel.push(this.apiJetpack);
+    // hujan: tetesan jatuh miring dan hilang saat menyentuh rumput, plus percikan di tanah
+    this.emiterHujan = this.add
+      .particles(0, 0, "tetes", {
+        x: { min: -40, max: width + 120 },
+        y: -12,
+        lifespan: 1000,
+        speedY: { min: 650, max: 850 },
+        speedX: { min: -130, max: -90 },
+        rotate: 8,
+        alpha: { start: 0.9, end: 0.6 },
+        frequency: 6,
+        deathZone: {
+          type: "onEnter",
+          source: new Phaser.Geom.Rectangle(
+            -200,
+            groundY + 2,
+            width + 600,
+            100,
+          ),
+        },
+        emitting: false,
+      })
+      .setDepth(7);
+    this.percikHujan = this.add
+      .particles(0, groundY + 1, "bintang", {
+        x: { min: 0, max: width },
+        lifespan: { min: 180, max: 320 },
+        speedX: { min: -60, max: 20 },
+        speedY: { min: -90, max: -30 },
+        gravityY: 400,
+        scale: { start: 1.5, end: 0.5 },
+        alpha: { start: 0.9, end: 0 },
+        tint: 0xcfe8ff,
+        frequency: 25,
+        emitting: false,
+      })
+      .setDepth(7);
+    this.semuaPartikel.push(this.emiterHujan, this.percikHujan);
+    // lapisan putih untuk kilatan petir (awalnya tak terlihat)
+    this.kilat = this.add
+      .rectangle(0, 0, width, height, 0xffffff)
+      .setOrigin(0, 0)
+      .setDepth(9)
+      .setAlpha(0);
     this.spawnTimer = this.time.delayedCall(1200, () => this.spawnObstacle());
     this.jadwalkanIkan();
     this.jadwalkanBurung();
     this.jadwalkanJetpack(Phaser.Math.Between(18000, 28000));
+    this.jadwalkanCuaca(Phaser.Math.Between(25000, 60000));
+    this.jadwalkanPetir();
 
     // kontrol: spasi, panah atas, atau tap/klik (kecuali saat menekan tombol suara)
     this.spaceKey = this.input.keyboard!.addKey(
@@ -1022,10 +1226,10 @@ export default class MainScene extends Phaser.Scene {
 
   // mendarat: badan memipih lalu memantul kembali; makin cepat jatuh, makin pipih
   private pipihkanKucing(kecepatanJatuh: number) {
-    const k = Phaser.Math.Clamp(kecepatanJatuh / 600, 0.25, 1);
+    const k = Phaser.Math.Clamp(kecepatanJatuh / 600, 0.5, 1);
     this.tweens.killTweensOf(this.squash);
-    this.squash.fx = 1 + 0.15 * k;
-    this.squash.fy = 1 - 0.15 * k;
+    this.squash.fx = 1 + 0.2 * k;
+    this.squash.fy = 1 - 0.2 * k;
     this.tweens.add({
       targets: this.squash,
       fx: 1,
@@ -1148,6 +1352,8 @@ export default class MainScene extends Phaser.Scene {
     this.spawnTimer?.remove();
     this.timerIkan?.remove();
     this.timerBurung?.remove();
+    this.timerCuaca?.remove();
+    this.timerPetir?.remove();
     this.timerJetpack?.remove();
     this.timerPola?.remove();
     this.hudJetpack.setVisible(false);
@@ -1244,6 +1450,7 @@ export default class MainScene extends Phaser.Scene {
         `SKOR ${Math.floor(this.skor).toString().padStart(5, "0")}`,
       );
       this.waktuMain += delta;
+      this.perbaruiCuaca(delta);
       this.terapkanSiklus(time);
 
       // tiap kelipatan 100: bunyi "ting" dan angka skor berdenyut
@@ -1271,8 +1478,7 @@ export default class MainScene extends Phaser.Scene {
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       const diTanah = body.blocked.down || body.touching.down;
       // simpan kecepatan jatuh terakhir: makin cepat jatuh, makin pipih saat mendarat
-      if (!this.sebelumnyaDiTanah || !diTanah)
-        this.kecepatanJatuh = body.velocity.y;
+      if (!diTanah) this.kecepatanJatuh = body.velocity.y;
       // puff saat mendarat, dan debu mengalir selama di tanah
       if (diTanah && !this.sebelumnyaDiTanah) {
         this.debuMendarat.explode(

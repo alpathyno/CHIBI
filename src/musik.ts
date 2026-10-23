@@ -20,14 +20,70 @@ const AKOR_SIANG: Akor[] = [
   { bass: 43, nada: [59, 62, 67] }, // G
 ];
 const MELODI_SIANG: (number | null)[] = [
-  76, _, 79, _, 76, 74, 72, _,
-  74, _, 76, _, 74, 72, 67, _,
-  72, _, 76, _, 81, _, 79, _,
-  72, _, 69, _, 72, 74, 72, _,
-  76, _, 79, _, 81, 79, 76, _,
-  79, _, 76, _, 74, _, 72, _,
-  69, _, 72, _, 74, 72, 69, _,
-  74, _, 72, _, 74, _, _, _,
+  76,
+  _,
+  79,
+  _,
+  76,
+  74,
+  72,
+  _,
+  74,
+  _,
+  76,
+  _,
+  74,
+  72,
+  67,
+  _,
+  72,
+  _,
+  76,
+  _,
+  81,
+  _,
+  79,
+  _,
+  72,
+  _,
+  69,
+  _,
+  72,
+  74,
+  72,
+  _,
+  76,
+  _,
+  79,
+  _,
+  81,
+  79,
+  76,
+  _,
+  79,
+  _,
+  76,
+  _,
+  74,
+  _,
+  72,
+  _,
+  69,
+  _,
+  72,
+  _,
+  74,
+  72,
+  69,
+  _,
+  74,
+  _,
+  72,
+  _,
+  74,
+  _,
+  _,
+  _,
 ];
 
 // ===== TEMA MALAM: A minor, tenang dan jarang nada =====
@@ -42,14 +98,70 @@ const AKOR_MALAM: Akor[] = [
   { bass: 43, nada: [55, 59, 62] }, // G
 ];
 const MELODI_MALAM: (number | null)[] = [
-  76, _, _, _, _, _, 72, _,
-  69, _, _, _, 72, _, _, _,
-  74, _, _, _, 76, _, _, _,
-  79, _, _, 74, _, _, _, _,
-  76, _, _, _, 72, _, 69, _,
-  72, _, _, _, 69, _, _, _,
-  67, _, _, _, 72, _, 76, _,
-  74, _, _, _, _, _, _, _,
+  76,
+  _,
+  _,
+  _,
+  _,
+  _,
+  72,
+  _,
+  69,
+  _,
+  _,
+  _,
+  72,
+  _,
+  _,
+  _,
+  74,
+  _,
+  _,
+  _,
+  76,
+  _,
+  _,
+  _,
+  79,
+  _,
+  _,
+  74,
+  _,
+  _,
+  _,
+  _,
+  76,
+  _,
+  _,
+  _,
+  72,
+  _,
+  69,
+  _,
+  72,
+  _,
+  _,
+  _,
+  69,
+  _,
+  _,
+  _,
+  67,
+  _,
+  _,
+  _,
+  72,
+  _,
+  76,
+  _,
+  74,
+  _,
+  _,
+  _,
+  _,
+  _,
+  _,
+  _,
 ];
 
 export class Musik {
@@ -66,6 +178,8 @@ export class Musik {
   private terakhirMalam = 0;
   private langkah = 0;
   private waktuLangkah = 0;
+  private gainHujan?: GainNode;
+  private hujanTerakhir = 0;
 
   constructor(scene: Phaser.Scene) {
     const mgr = scene.sound as Phaser.Sound.WebAudioSoundManager;
@@ -146,6 +260,81 @@ export class Musik {
     this.terapkanVolume();
   }
 
+  // suara hujan: derau yang disaring, volumenya mengikuti intensitas hujan (0 sampai 1)
+  setHujan(level: number, langsung = false) {
+    if (!this.siap) return;
+    const l = Math.min(1, Math.max(0, level));
+    if (!langsung && Math.abs(l - this.hujanTerakhir) < 0.02) return;
+    if (!this.gainHujan) {
+      if (l === 0) return;
+      this.buatHujan();
+    }
+    this.hujanTerakhir = l;
+    const t = this.ctx.currentTime;
+    const g = this.gainHujan!.gain;
+    if (langsung) {
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(l * 0.2, t);
+    } else {
+      g.setTargetAtTime(l * 0.2, t, 0.5);
+    }
+  }
+
+  private buatHujan() {
+    const ctx = this.ctx;
+    const panjang = ctx.sampleRate * 2;
+    const penyangga = ctx.createBuffer(1, panjang, ctx.sampleRate);
+    const data = penyangga.getChannelData(0);
+    for (let i = 0; i < panjang; i++) data[i] = Math.random() * 2 - 1;
+
+    const sumber = ctx.createBufferSource();
+    sumber.buffer = penyangga;
+    sumber.loop = true;
+    const atas = ctx.createBiquadFilter();
+    atas.type = "highpass";
+    atas.frequency.value = 900;
+    const bawah = ctx.createBiquadFilter();
+    bawah.type = "lowpass";
+    bawah.frequency.value = 5200;
+    this.gainHujan = ctx.createGain();
+    this.gainHujan.gain.value = 0;
+
+    sumber.connect(atas);
+    atas.connect(bawah);
+    bawah.connect(this.gainHujan);
+    this.gainHujan.connect(this.keluar);
+    sumber.start();
+  }
+
+  // gemuruh petir: derau rendah yang meredup, dibunyikan setelah jeda (detik)
+  gemuruh(tunda = 0.4) {
+    if (!this.siap || this.ctx.state !== "running") return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + tunda;
+
+    const panjang = Math.floor(ctx.sampleRate * 2);
+    const penyangga = ctx.createBuffer(1, panjang, ctx.sampleRate);
+    const data = penyangga.getChannelData(0);
+    for (let i = 0; i < panjang; i++) data[i] = Math.random() * 2 - 1;
+
+    const sumber = ctx.createBufferSource();
+    sumber.buffer = penyangga;
+    const saring = ctx.createBiquadFilter();
+    saring.type = "lowpass";
+    saring.frequency.setValueAtTime(500, t);
+    saring.frequency.exponentialRampToValueAtTime(70, t + 1.8);
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.linearRampToValueAtTime(0.5, t + 0.08);
+    amp.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
+
+    sumber.connect(saring);
+    saring.connect(amp);
+    amp.connect(this.keluar);
+    sumber.start(t);
+    sumber.stop(t + 2);
+  }
+
   private terapkanVolume() {
     if (!this.siap) return;
     const t = this.ctx.currentTime;
@@ -168,8 +357,10 @@ export class Musik {
       const l = this.langkah;
       const bar = Math.floor(l / 8);
       const s = l % 8;
-      if (this.levelSiang > 0.02) this.langkahSiang(bar, s, l, this.waktuLangkah);
-      if (this.levelMalam > 0.02) this.langkahMalam(bar, s, l, this.waktuLangkah);
+      if (this.levelSiang > 0.02)
+        this.langkahSiang(bar, s, l, this.waktuLangkah);
+      if (this.levelMalam > 0.02)
+        this.langkahMalam(bar, s, l, this.waktuLangkah);
       this.waktuLangkah += LANGKAH;
       this.langkah = (l + 1) % 64;
     }
@@ -180,18 +371,49 @@ export class Musik {
     const tujuan = this.gainSiang;
     // bass
     if (s === 0)
-      this.suara({ tipe: "sine", midi: akor.bass, t, dur: LANGKAH * 3.6, vol: 0.1, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: akor.bass,
+        t,
+        dur: LANGKAH * 3.6,
+        vol: 0.1,
+        tujuan,
+      });
     if (s === 4)
-      this.suara({ tipe: "sine", midi: akor.bass + 7, t, dur: LANGKAH * 3.2, vol: 0.06, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: akor.bass + 7,
+        t,
+        dur: LANGKAH * 3.2,
+        vol: 0.06,
+        tujuan,
+      });
     // petikan arpeggio
     const pola = [-1, -1, 0, 1, 2, 1, 0, -1];
     const i = pola[s];
     if (i >= 0)
-      this.suara({ tipe: "triangle", midi: akor.nada[i], t, dur: 0.6, vol: 0.055, lowpass: 2400, tujuan });
+      this.suara({
+        tipe: "triangle",
+        midi: akor.nada[i],
+        t,
+        dur: 0.6,
+        vol: 0.055,
+        lowpass: 2400,
+        tujuan,
+      });
     // melodi "siulan"
     const m = MELODI_SIANG[l];
     if (m !== null)
-      this.suara({ tipe: "sine", midi: m, t, dur: LANGKAH * 2.4, vol: 0.08, atak: 0.03, vibrato: 4, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: m,
+        t,
+        dur: LANGKAH * 2.4,
+        vol: 0.08,
+        atak: 0.03,
+        vibrato: 4,
+        tujuan,
+      });
   }
 
   private langkahMalam(bar: number, s: number, l: number, t: number) {
@@ -200,20 +422,63 @@ export class Musik {
     // pad lembut sepanjang satu birama
     if (s === 0) {
       akor.nada.forEach((m) =>
-        this.suara({ tipe: "triangle", midi: m, t, dur: LANGKAH * 8, vol: 0.035, atak: 0.7, lepas: 1, lowpass: 1300, tujuan }),
+        this.suara({
+          tipe: "triangle",
+          midi: m,
+          t,
+          dur: LANGKAH * 8,
+          vol: 0.035,
+          atak: 0.7,
+          lepas: 1,
+          lowpass: 1300,
+          tujuan,
+        }),
       );
-      this.suara({ tipe: "sine", midi: akor.bass, t, dur: LANGKAH * 8, vol: 0.08, atak: 0.25, lepas: 1, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: akor.bass,
+        t,
+        dur: LANGKAH * 8,
+        vol: 0.08,
+        atak: 0.25,
+        lepas: 1,
+        tujuan,
+      });
     }
     // melodi kotak musik
     const m = MELODI_MALAM[l];
     if (m !== null) {
-      this.suara({ tipe: "sine", midi: m, t, dur: 1.9, vol: 0.08, atak: 0.004, tujuan });
-      this.suara({ tipe: "sine", midi: m + 12, t, dur: 1.1, vol: 0.03, atak: 0.004, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: m,
+        t,
+        dur: 1.9,
+        vol: 0.08,
+        atak: 0.004,
+        tujuan,
+      });
+      this.suara({
+        tipe: "sine",
+        midi: m + 12,
+        t,
+        dur: 1.1,
+        vol: 0.03,
+        atak: 0.004,
+        tujuan,
+      });
     }
     // kerlip nada tinggi acak, seperti bintang
     if (s % 2 === 1 && Math.random() < 0.06) {
       const tinggi = [88, 91, 93, 96][Math.floor(Math.random() * 4)];
-      this.suara({ tipe: "sine", midi: tinggi, t, dur: 1.2, vol: 0.025, atak: 0.004, tujuan });
+      this.suara({
+        tipe: "sine",
+        midi: tinggi,
+        t,
+        dur: 1.2,
+        vol: 0.025,
+        atak: 0.004,
+        tujuan,
+      });
     }
   }
 

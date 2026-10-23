@@ -549,6 +549,12 @@ export function buatTekstur(scene: Phaser.Scene) {
     2,
   );
 
+    // tetes hujan: garis vertikal tipis 2x6
+  g.clear();
+  g.fillStyle(0xd6ecff);
+  g.fillRect(0, 0, 2, 6);
+  g.generateTexture("tetes", 2, 6);
+
   g.destroy();
 }
 

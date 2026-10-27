@@ -191,6 +191,8 @@ export default class MainScene extends Phaser.Scene {
   private sisaTerbang = 0;
   private bipTerakhir = -1;
   private kebalSampai = 0;
+  private kawanan: Phaser.GameObjects.Sprite[] = [];
+  private kupu: Phaser.GameObjects.Sprite[] = [];
 
   // dipanggil otomatis saat tab ditinggalkan atau jendela kehilangan fokus
   private jedaOtomatis = () => {
@@ -250,6 +252,10 @@ export default class MainScene extends Phaser.Scene {
       const a = (b as Phaser.GameObjects.Sprite).anims;
       if (this.dijeda) a.pause();
       else a.resume();
+    });
+    [...this.kawanan, ...this.kupu].forEach((s) => {
+      if (this.dijeda) s.anims.pause();
+      else s.anims.resume();
     });
     this.panelJeda.setVisible(this.dijeda);
     bunyi(
@@ -462,6 +468,106 @@ export default class MainScene extends Phaser.Scene {
     this.musik.gemuruh(Phaser.Math.FloatBetween(0.3, 1.2));
   }
 
+    // seberapa cerah suasananya (0 sampai 1): memudar saat malam dan hujan
+  private cerah() {
+    return (
+      (1 - Phaser.Math.Clamp(this.tingkatMalam * 1.5, 0, 1)) * (1 - this.hujan)
+    );
+  }
+
+  // kawanan burung kecil melintas jauh di langit
+  private jadwalkanKawanan() {
+    this.time.delayedCall(Phaser.Math.Between(7000, 18000), () => {
+      if (this.selesai) return;
+      if (this.cerah() > 0.6) this.munculkanKawanan();
+      this.jadwalkanKawanan();
+    });
+  }
+
+  private munculkanKawanan() {
+    const { width } = this.scale;
+    const jumlah = Phaser.Math.Between(3, 5);
+    const yDasar = Phaser.Math.Between(90, 190);
+    const laju = Phaser.Math.Between(28, 55);
+    for (let i = 0; i < jumlah; i++) {
+      const y = yDasar + (i % 2) * 14 + Phaser.Math.Between(-6, 6);
+      const b = this.add
+        .sprite(width + 30 + i * 26, y, "burung-kecil-1")
+        .setDepth(-1)
+        .setAlpha(0);
+      b.play("kepakJauh");
+      b.anims.setProgress(Math.random());
+      b.setData("laju", laju + Phaser.Math.Between(-4, 4));
+      b.setData("yDasar", y);
+      b.setData("fase", Math.random() * 6);
+      this.kawanan.push(b);
+    }
+  }
+
+  // kupu-kupu beterbangan dekat rerumputan
+  private jadwalkanKupu() {
+    this.time.delayedCall(Phaser.Math.Between(4000, 10000), () => {
+      if (this.selesai) return;
+      if (this.cerah() > 0.6) this.munculkanKupu();
+      this.jadwalkanKupu();
+    });
+  }
+
+  private munculkanKupu() {
+    const { width, height } = this.scale;
+    const groundY = height - 60;
+    const warna = [0xff7bac, 0xffd23f, 0xa8ebff, 0xc9a8ff, 0xffffff];
+    const jumlah = Phaser.Math.Between(1, 2);
+    for (let i = 0; i < jumlah; i++) {
+      const yDasar = groundY - Phaser.Math.Between(35, 95);
+      const k = this.add
+        .sprite(width + 20 + i * 30, yDasar, "kupu-1")
+        .setDepth(3)
+        .setAlpha(0)
+        .setTint(Phaser.Utils.Array.GetRandom(warna));
+      k.play("kepakKupu");
+      k.anims.setProgress(Math.random());
+      k.setData("yDasar", yDasar);
+      k.setData("geser", Phaser.Math.Between(-25, 35));
+      k.setData("fase", Math.random() * 6);
+      this.kupu.push(k);
+    }
+  }
+
+  // gerakan burung dan kupu-kupu tiap frame
+  private perbaruiLatarHidup(time: number, delta: number) {
+    const dt = delta / 1000;
+    const terang = this.cerah();
+
+    this.kawanan = this.kawanan.filter((b) => {
+      b.x -= (b.getData("laju") as number) * dt;
+      b.y =
+        (b.getData("yDasar") as number) +
+        Math.sin(time / 600 + (b.getData("fase") as number)) * 3;
+      b.setAlpha(terang);
+      if (b.x < -40) {
+        b.destroy();
+        return false;
+      }
+      return true;
+    });
+
+    this.kupu = this.kupu.filter((k) => {
+      const fase = k.getData("fase") as number;
+      k.x += (-this.kecepatan * 0.5 + (k.getData("geser") as number)) * dt;
+      k.y =
+        (k.getData("yDasar") as number) +
+        Math.sin(time / 330 + fase) * 14 +
+        Math.sin(time / 140 + fase * 2) * 5;
+      k.setAlpha(terang);
+      if (k.x < -30) {
+        k.destroy();
+        return false;
+      }
+      return true;
+    });
+  }
+
   create() {
     const { width, height } = this.scale;
     const groundY = height - 60;
@@ -474,6 +580,8 @@ export default class MainScene extends Phaser.Scene {
     this.burungAkanDatang = false;
     this.waktuMain = 0;
     this.hujan = 0;
+    this.kawanan = [];
+    this.kupu = [];
     this.lajuCuaca = 2500;
     this.frekHujan = 6;
     this.tingkatMalam = 0;
@@ -683,6 +791,9 @@ export default class MainScene extends Phaser.Scene {
     this.jadwalkanJetpack(Phaser.Math.Between(18000, 28000));
     this.jadwalkanCuaca(Phaser.Math.Between(25000, 60000));
     this.jadwalkanPetir();
+    this.jadwalkanKawanan();
+    this.jadwalkanKupu();
+    this.time.delayedCall(1500, () => this.munculkanKupu()); // supaya langsung ada yang terlihat
 
     // kontrol: spasi, panah atas, atau tap/klik (kecuali saat menekan tombol suara)
     this.spaceKey = this.input.keyboard!.addKey(
@@ -1452,6 +1563,7 @@ export default class MainScene extends Phaser.Scene {
       this.waktuMain += delta;
       this.perbaruiCuaca(delta);
       this.terapkanSiklus(time);
+      this.perbaruiLatarHidup(time, delta);
 
       // tiap kelipatan 100: bunyi "ting" dan angka skor berdenyut
       const kelipatan = Math.floor(this.skor / 100);

@@ -52,6 +52,22 @@ export function buatAnimasi(scene: Phaser.Scene) {
       repeat: -1,
     });
   }
+  if (!scene.anims.exists("kepakJauh")) {
+    scene.anims.create({
+      key: "kepakJauh",
+      frames: [{ key: "burung-kecil-1" }, { key: "burung-kecil-2" }],
+      frameRate: 5,
+      repeat: -1,
+    });
+  }
+  if (!scene.anims.exists("kepakKupu")) {
+    scene.anims.create({
+      key: "kepakKupu",
+      frames: [{ key: "kupu-1" }, { key: "kupu-2" }],
+      frameRate: 8,
+      repeat: -1,
+    });
+  }
 }
 
 // mengubah peta teks menjadi tekstur pixel (satu huruf = satu sel warna)
@@ -104,17 +120,99 @@ export function buatTekstur(scene: Phaser.Scene) {
     }
   };
 
+  // daftar bukit: [posisi x, lebar, tinggi]
+  const BUKIT_JAUH = [
+    [0, 256, 90],
+    [240, 304, 120],
+    [560, 240, 80],
+  ];
+  const BUKIT_DEKAT = [
+    [0, 208, 56],
+    [240, 192, 48],
+    [592, 208, 64],
+  ];
+
+  // tinggi permukaan bukit pada kolom x (rumusnya sama dengan menggambar bukit)
+  const permukaan = (daftar: number[][], x: number) => {
+    let tinggi = 0;
+    for (const [x0, lebar, t] of daftar) {
+      if (x < x0 || x >= x0 + lebar) continue;
+      const n = lebar / 16;
+      const i = Math.floor((x - x0) / 16);
+      const h = Math.round((t * Math.sin((Math.PI * (i + 0.5)) / n)) / 8) * 8;
+      tinggi = Math.max(tinggi, h);
+    }
+    return tinggi;
+  };
+
+  // menempelkan gambar pixel kecil (rumah, pohon) ke tekstur yang sedang digambar
+  const taruh = (
+    peta: string[],
+    warna: Record<string, number>,
+    sel: number,
+    x: number,
+    yDasar: number,
+  ) => {
+    peta.forEach((baris, r) => {
+      [...baris].forEach((c, k) => {
+        if (c === ".") return;
+        g.fillStyle(warna[c]);
+        g.fillRect(x + k * sel, yDasar - (peta.length - r) * sel, sel, sel);
+      });
+    });
+  };
+
+  const RUMAH = [
+    "...rr...",
+    "..rrrr..",
+    ".rrrrrr.",
+    "rrrrrrrr",
+    ".wwwwww.",
+    ".wkwwdw.",
+    ".wwwwdw.",
+  ];
+  const POHON = [
+    "..gg..",
+    ".hggg.",
+    "hhgggg",
+    "hgggkk",
+    ".gkkk.",
+    "..tt..",
+    "..tt..",
+    "..tt..",
+  ];
+
+  // bukit jauh: warna pucat, dengan rumah dan pohon kecil
   g.fillStyle(0x9fdcaa);
-  bukit(0, 256, 90, 140);
-  bukit(240, 304, 120, 140);
-  bukit(560, 240, 80, 140);
+  BUKIT_JAUH.forEach(([x, l, t]) => bukit(x, l, t, 140));
+  const WARNA_RUMAH = { r: 0xc9917f, w: 0xefe6d2, k: 0x8fb7d6, d: 0x8a6a4f };
+  [64, 400, 640].forEach((x) =>
+    taruh(RUMAH, WARNA_RUMAH, 2, x, 140 - permukaan(BUKIT_JAUH, x)),
+  );
+  const WARNA_POHON_JAUH = {
+    g: 0x78c28a,
+    h: 0x8ed29d,
+    k: 0x62a877,
+    t: 0x8a7a66,
+  };
+  [112, 336, 704].forEach((x) =>
+    taruh(POHON, WARNA_POHON_JAUH, 2, x + 2, 140 - permukaan(BUKIT_JAUH, x)),
+  );
   g.generateTexture("bukit-jauh", 800, 140);
   g.clear();
 
+  // bukit dekat: pohon lebih besar dan hijau
   g.fillStyle(0x7fd36b);
-  bukit(0, 208, 56, 90);
-  bukit(240, 192, 48, 90);
-  bukit(592, 208, 64, 90);
+  BUKIT_DEKAT.forEach(([x, l, t]) => bukit(x, l, t, 90));
+  const WARNA_POHON_DEKAT = {
+    g: 0x4fb04a,
+    h: 0x73ce63,
+    k: 0x3a8f3c,
+    t: 0x6b4f3a,
+  };
+  [48, 112, 288, 368, 640, 736].forEach((x) =>
+    taruh(POHON, WARNA_POHON_DEKAT, 3, x - 1, 90 - permukaan(BUKIT_DEKAT, x)),
+  );
   g.generateTexture("bukit-dekat", 800, 90);
   g.clear();
 
@@ -549,11 +647,45 @@ export function buatTekstur(scene: Phaser.Scene) {
     2,
   );
 
-    // tetes hujan: garis vertikal tipis 2x6
+  // tetes hujan: garis vertikal tipis 2x6
   g.clear();
   g.fillStyle(0xd6ecff);
   g.fillRect(0, 0, 2, 6);
   g.generateTexture("tetes", 2, 6);
+
+  // burung kecil di kejauhan, 2 frame: 5x3 sel, tiap sel 3px
+  const WARNA_BURUNG_JAUH = { x: 0x3a4a66 };
+  gambarPeta(
+    g,
+    "burung-kecil-1",
+    ["x...x", ".x.x.", "..x.."],
+    WARNA_BURUNG_JAUH,
+    3,
+  );
+  gambarPeta(
+    g,
+    "burung-kecil-2",
+    ["xx.xx", "..x..", "....."],
+    WARNA_BURUNG_JAUH,
+    3,
+  );
+
+  // kupu-kupu, 2 frame: 7x5 sel, tiap sel 2px (warna sayap diatur lewat tint di game)
+  const WARNA_KUPU = { w: 0xffffff, o: 0x2b2b3a };
+  gambarPeta(
+    g,
+    "kupu-1",
+    ["ww...ww", "wwwowww", ".wwoww.", "..wow..", "...o..."],
+    WARNA_KUPU,
+    2,
+  );
+  gambarPeta(
+    g,
+    "kupu-2",
+    ["...o...", "..wow..", "..wow..", "...o...", "......."],
+    WARNA_KUPU,
+    2,
+  );
 
   g.destroy();
 }
